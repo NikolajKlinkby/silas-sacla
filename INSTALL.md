@@ -31,7 +31,7 @@ configuration, the run log, the calibrations and the analysis.
 ## 1. The code
 
 ```bash
-git clone https://github.com/nklinkby/silas-sacla.git SILAS
+git clone https://github.com/NikolajKlinkby/silas-sacla.git SILAS
 cd SILAS
 ```
 

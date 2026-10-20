@@ -10,7 +10,7 @@ authors:
 version: "0.1.0"
 date-released: "2026-10-20"
 license: MIT
-repository-code: "https://github.com/nklinkby/silas-sacla"
+repository-code: "https://github.com/NikolajKlinkby/silas-sacla"
 abstract: >-
   Python tools for pump-probe experiments at the SACLA X-ray free-electron laser (BL3):
   a run and scan logger, live and offline MPCCD viewers, energy calibration, threshold and
