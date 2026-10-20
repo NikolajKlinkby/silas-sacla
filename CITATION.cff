@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "SILAS: SACLA Imaging, Logging and Analysis Suite"
+type: software
+authors:
+  - given-names: Nikolaj
+    family-names: Klinkby
+    affiliation: "Aarhus University"
+    orcid: "https://orcid.org/0009-0008-0317-116X"
+version: "0.1.0"
+date-released: "2026-10-20"
+license: MIT
+repository-code: "https://github.com/nklinkby/silas-sacla"
+abstract: >-
+  Python tools for pump-probe experiments at the SACLA X-ray free-electron laser (BL3):
+  a run and scan logger, live and offline MPCCD viewers, energy calibration, threshold and
+  dark corrections, a timing-tool analysis with per-shot arrival-time correction, ROI scan
+  analysis online and on the SACLA HPC, and full-frame reductions of every detector pixel.
+keywords:
+  - SACLA
+  - X-ray free-electron laser
+  - pump-probe
+  - MPCCD
+  - timing tool
+  - data analysis

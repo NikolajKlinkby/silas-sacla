@@ -1,0 +1,29 @@
+# each computer keeps its own settings and results
+config/
+output/
+
+# generated
+docs/html/
+*__pycache__/
+*.pyc
+*.mypy_cache/
+
+# editor settings (template: sacla_local_api/vscode_settings.json)
+*.vscode/
+
+# downloaded wheels (scripts/fetch_hpc_packages.sh, scripts/fetch_jupyter_packages.sh)
+third_party/
+
+# the local SACLA environment: only the scripts, stubs, README and examples are ours.
+# Fetched from the HPC by sacla_local_api/scripts/fetch_sacla.sh (needs an HPC account): SACLA's
+# libraries, headers and simulator data, and copies of system libraries. Not ours to publish.
+sacla_local_api/software/
+*venv/
+*.env
+sacla_local_api/hpc/
+
+# the SACLA manuals: copyright RIKEN / JASRI, published only on the VPN-only HPC portal.
+# Only the builder is ours; download them with docs/sacla_manuals/build_all.py --download.
+docs/sacla_manuals/resources/
+docs/sacla_manuals/markdown/
+docs/sacla_manuals/html/

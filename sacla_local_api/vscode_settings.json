@@ -1,0 +1,19 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}/sacla_local_api/venv/bin/python",
+    "python.envFile": "${workspaceFolder}/sacla_local_api/.env",
+    "python.analysis.extraPaths": ["${workspaceFolder}"],
+    "terminal.integrated.profiles.linux": {
+        "SACLA_Env": {
+            "path": "/bin/bash",
+            "args": [
+                "--init-file",
+                "${workspaceFolder}/sacla_local_api/vscode_init.sh"
+            ]
+        }
+    },
+    "terminal.integrated.defaultProfile.linux": "SACLA_Env",
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/.mypy_cache": true
+    }
+}
