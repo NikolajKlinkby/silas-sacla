@@ -614,7 +614,7 @@ def build(cfg: Config) -> Dict[str, Any]:
                 ttbin.set_option(cfg, key, value)
         print(ttbin.describe(cfg))
 
-    def scan_result(which: int = -1) -> Any:
+    def scan_result(which: int = -1, show=False) -> Any:
         """The per-step table (steps.csv) of an analysed scan as a pandas DataFrame
         (which as in scan_info); prints where the plot is."""
         import pandas as pd
@@ -626,6 +626,9 @@ def build(cfg: Config) -> Dict[str, Any]:
             print("scan {} is not analysed yet: analyse_scan({})".format(sid, sid))
             return None
         print("plot: {}".format(os.path.join(folder, "plot.png")))
+        if show:
+            args = ["--scan", str(which)]
+            runner.run("silas.offline.scan_plot", *args)
         return pd.read_csv(path)
 
     def load_scan(which: int = -1) -> Dict[str, Any]:

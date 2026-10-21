@@ -55,6 +55,7 @@ import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+import pandas as pd
 
 import silas  # noqa: F401  first silas import: applies the profile's sys.path
 from silas.core import db, energy, mpccd, names, roi, sacla, scan, scanroi
@@ -385,8 +386,67 @@ def summarise(shots: Any, roi_names: Sequence[str], runs: Sequence[Dict[str, Any
     res = results(shots, roi_names, refs, runs, n_states)
     return res["table"], steps_frame(res)
 
+def put(group: Any, frame: Any) -> None:
+    for col in frame.columns:
+        data = frame[col].to_numpy()
+        if data.dtype == object:          # numbers with None (e.g. motor value): float with NaN
+            try:
+                data = np.array([np.nan if v is None else float(v) for v in data], np.float64)
+            except (TypeError, ValueError):
+                data = np.array([str(v) for v in data], dtype="S")
+        group.create_dataset(str(col), data=data)
 
-def write_h5(path: str, shots: Any, steps: Any, info: Dict[str, Any], bins: Any = None, off_steps: Any = None) -> bool:
+def write_item(group, name, obj):
+    import pandas as pd
+    import numpy as np
+    import json
+    import h5py
+
+    # DataFrame
+    if isinstance(obj, pd.DataFrame):
+        g = group.create_group(name)
+        g.attrs["type"] = "dataframe"
+        put(g, obj)
+        return
+
+    # Dictionary
+    if isinstance(obj, dict):
+        g = group.create_group(name)
+        g.attrs["type"] = "dict"
+        for k, v in obj.items():
+            write_item(g, str(k), v)
+        return
+
+    # List or tuple
+    if isinstance(obj, (list, tuple)):
+        try:
+            group.create_dataset(name, data=np.asarray(obj))
+        except Exception:
+            group.create_dataset(name,
+                                 data=np.string_(json.dumps(obj, default=str)))
+        return
+
+    # Numpy array
+    if isinstance(obj, np.ndarray):
+        if obj.dtype == object:
+            try:
+                obj = obj.astype(np.float64)
+            except Exception:
+                obj = np.asarray([str(x) for x in obj],
+                                 dtype=h5py.string_dtype())
+        group.create_dataset(name, data=obj)
+        return
+
+    # Scalar
+    if np.isscalar(obj):
+        group.create_dataset(name, data=obj)
+        return
+
+    # Fallback
+    group.create_dataset(name,
+                         data=np.string_(json.dumps(obj, default=str)))
+
+def write_h5(path: str, shots: Any, steps: Any, info: Dict[str, Any], timetool: Any = None, result: Any = None) -> bool:
     """The shot table, the step table and the info (JSON attribute) in one HDF5 file.
     False (with a message) if h5py is missing."""
     try:
@@ -395,24 +455,19 @@ def write_h5(path: str, shots: Any, steps: Any, info: Dict[str, Any], bins: Any 
         print("h5py is not installed here: no .h5 file (the .csv files are written)")
         return False
 
-    def put(group: Any, frame: Any) -> None:
-        for col in frame.columns:
-            data = frame[col].to_numpy()
-            if data.dtype == object:          # numbers with None (e.g. motor value): float with NaN
-                try:
-                    data = np.array([np.nan if v is None else float(v) for v in data], np.float64)
-                except (TypeError, ValueError):
-                    data = np.array([str(v) for v in data], dtype="S")
-            group.create_dataset(str(col), data=data)
-
     tmp = path + ".tmp"
     with h5py.File(tmp, "w") as f:
         put(f.create_group("shots"), shots)
         put(f.create_group("steps"), steps)
-        if bins is not None:
-            put(f.create_group("bins"), bins)
-        if off_steps is not None:
-            put(f.create_group("off_steps"), off_steps)
+        if timetool is not None:
+            ttgroup = f.create_group("timetool")
+            for key, value in timetool.items():
+                write_item(ttgroup, key, value)
+
+        if result is not None:
+            resgroup = f.create_group("results")
+            for key, value in result.items():
+                write_item(resgroup, key, value)
         f.attrs["info"] = json.dumps(info, default=str)
         f.attrs["quantiles"] = np.asarray(scanroi.QUANTILES)
     os.replace(tmp, path)
@@ -529,25 +584,53 @@ def plot(res: Dict[str, Any], title: str, xlabel: str, path: Optional[str], show
     else:
         plt.close(fig)
 
-
-def load_h5(path: str) -> Dict[str, Any]:
-    """An analysis' scan_<id>.h5 as {"shots", "steps", "bins", "off_steps": DataFrames (the last
-    two only with time-tool binning), "info": dict}; text columns decoded."""
+def read_item(obj):
     import h5py
     import pandas as pd
+    import numpy as np
+    import json
 
-    out = {}  # type: Dict[str, Any]
+    # Dataset
+    if isinstance(obj, h5py.Dataset):
+        data = obj[()]
+
+        if isinstance(data, bytes):
+            try:
+                return json.loads(data.decode())
+            except Exception:
+                return data.decode()
+
+        if isinstance(data, np.ndarray) and data.dtype.kind == "S":
+            return data.astype(str)
+
+        return data
+
+    # Group
+    kind = obj.attrs.get("type", "dict")
+
+    if kind == "dataframe":
+        return pd.DataFrame({k: read_item(obj[k]) for k in obj})
+
+    elif kind == "dict":
+        return {k: read_item(obj[k]) for k in obj}
+
+    else:
+        raise ValueError(f"Unknown HDF5 object type '{kind}'")
+
+def load_h5(path: str) -> Dict[str, Any]:
+    """An analysis' scan_<id>.h5 as {"shots", "steps", "timetool", "results": DataFrames (the last
+    two only with time-tool binning), "info": dict}; text columns decoded."""
+    import h5py
+    import json
+
+    out = {}
+
     with h5py.File(path, "r") as f:
-        for g in ("shots", "steps", "bins", "off_steps"):
-            if g in f:
-                data = {}
-                for k in f[g]:
-                    v = f[g][k][()]
-                    if v.dtype.kind == "S":
-                        v = v.astype(str)
-                    data[k] = v
-                out[g] = pd.DataFrame(data)
+        for key in f:
+            out[key] = read_item(f[key])
+
         out["info"] = json.loads(f.attrs["info"])
+
     return out
 
 
@@ -766,15 +849,14 @@ def analyse(args: Any) -> Optional[str]:
     for label in labels:
         info["shots"]["used_with_" + label] = int((shots["read"] & np.isfinite(shots["ref_" + label])).sum())
     h5_path = os.path.join(out, "scan_{}.h5".format(sc["scan_id"]))
-    write_h5(h5_path, shots, steps, info, bins=tt["bins"] if tt is not None else None,
-             off_steps=tt["off"] if tt is not None else None)
+    write_h5(h5_path, shots, steps, info, tt, res)
     phases["write"] = time.time() - t3
     info["timing_s"] = {"phases": phases, "workers_summed": timing}
     with open(os.path.join(out, "info.json"), "w") as fh:
         json.dump(info, fh, indent=1, default=str)
     t4 = time.time()
     xlabel = sc["motor"] if res["table"] and res["table"][0]["x_is_value"] else "scan step (motor value not known)"
-    title = "scan {} ({} runs) - {}".format(sc["scan_id"], len(sc["runs"]), key)
+    title = "scan {} ({} runs) - {}".format(sc["scan_id"], len(sc["runs"]), info['array'])
     s = info["shots"]
     print("shots: {} total, {} used, {} X-rays off / bad beam, {} pump unknown{}".format(
         s["total"], s["used"], s["xray_off"], s["pump_unknown"],

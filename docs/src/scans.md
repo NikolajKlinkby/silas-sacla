@@ -102,6 +102,7 @@ analyse_scan(1234501, name="octal")                 # the ROIs of another MPCCD 
 analyse_scan(1234501, step_reference=True)         # also referenced per step
 analyse_scan(1234501, pairs=True)                  # also on / off of nearest-off pairs
 scan_result(1234501)                               # the per-step table (pandas)
+scan_result(1234501, show=True)                    # also replots the data                        
 ```
 
 `which` is as in `scan_info()`: `-1` the newest scan of the run log, `-2` the one before, or
@@ -249,6 +250,8 @@ Extra files with binning: `bins.csv`, `off_steps.csv`, the groups `bins` and `of
 | `off_steps` | scan step | `step`, `value`, `t_ps`, `n` (pump-off shots), `<column>_q16`, `_median`, `_q84` |
 | attribute `info` | | JSON; `info["tt_binning"]`: bin width (ps, pulse), `ps_per_pulse`, `t0_pulse` (centre of bin 0), the calibration, counts |
 
+### Loading and using the data
+
 In the session `load_scan(which)` reads it all (pandas DataFrames, text decoded):
 
 ```python
@@ -263,14 +266,141 @@ on = shots[(shots["state"] == 0) & shots["read"] & shots["edge_good"]]
 on[["run", "tag", "t_ps", "bin", "roi_bragg"]]
 ```
 
-Elsewhere (e.g. a notebook) the same with h5py:
+Elsewhere (e.g. a notebook) we can either use SILAS's `load_h5()` or read the h5 file directly with h5py and pandas:
+
+#### Using SILAS's `load_h5()`
+
+Example, no time tool correction:
 
 ```python
-import h5py, json, pandas as pd
-with h5py.File(".../scans/scan_1234501/scan_1234501.h5", "r") as f:
-    bins = pd.DataFrame({k: f["bins"][k][()] for k in f["bins"]})
-    shots = pd.DataFrame({k: f["shots"][k][()] for k in f["shots"]})
-    info = json.loads(f.attrs["info"])
+import matplotlib.pyplot as plt
+
+from silas.offline.scan_analysis import load_h5
+
+data = load_h5("scan_123456.h5")
+
+res = data["results"]
+
+roi = res["rois"][0]      # first ROI
+
+x = res["raw"]["x"]
+med = res["raw"]["med"][0, :, 0]
+lo = res["raw"]["lo"][0, :, 0]
+hi = res["raw"]["hi"][0, :, 0]
+
+plt.errorbar(
+    x,
+    med,
+    yerr=[lo, hi],
+    marker="o",
+    capsize=2,
+)
+
+plt.xlabel("Scan position")
+plt.ylabel("ROI signal")
+plt.title(roi)
+plt.grid(True)
+plt.show()
+```
+
+Example with time-tool binning:
+
+```python
+import matplotlib.pyplot as plt
+
+from silas.offline.scan_analysis import load_h5
+
+data = load_h5("scan_123456.h5")
+
+tt = data["timetool"]
+
+roi = tt["panels"][0][1][0]     # first ROI column
+
+bins = tt["bins"]
+
+x = bins["t_ps"]
+
+med = bins[roi + "_median"]
+lo = med - bins[roi + "_q16"]
+hi = bins[roi + "_q84"] - med
+
+plt.errorbar(
+    x,
+    med,
+    yerr=[lo, hi],
+    marker="o",
+    capsize=2,
+)
+
+plt.xlabel("Time (ps)")
+plt.ylabel("ROI signal")
+plt.title(roi)
+plt.grid(True)
+plt.show()
+```
+
+#### No SILAS, with h5py and pandas
+
+Example, no time tool correction:
+
+```python
+import h5py
+import matplotlib.pyplot as plt
+
+with h5py.File("scan_123456.h5") as f:
+
+    raw = f["results"]["raw"]
+
+    x = raw["x"][:]
+    med = raw["med"][0, :, 0]
+    lo = raw["lo"][0, :, 0]
+    hi = raw["hi"][0, :, 0]
+
+plt.errorbar(
+    x,
+    med,
+    yerr=[lo, hi],
+    marker="o",
+    capsize=2,
+)
+
+plt.xlabel("Scan position")
+plt.ylabel("ROI signal")
+plt.grid(True)
+plt.show()
+```
+
+Example with time-tool binning:
+
+```python
+import h5py
+import matplotlib.pyplot as plt
+
+with h5py.File("scan_123456.h5") as f:
+
+    bins = f["timetool"]["bins"]
+
+    # choose any ROI column
+    roi = "roi_my_roi"
+
+    x = bins["t_ps"][:]
+
+    med = bins[roi + "_median"][:]
+    lo = med - bins[roi + "_q16"][:]
+    hi = bins[roi + "_q84"][:] - med
+
+plt.errorbar(
+    x,
+    med,
+    yerr=[lo, hi],
+    marker="o",
+    capsize=2,
+)
+
+plt.xlabel("Time (ps)")
+plt.ylabel("ROI signal")
+plt.grid(True)
+plt.show()
 ```
 
 ### Speed
