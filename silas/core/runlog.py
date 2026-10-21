@@ -17,19 +17,26 @@ Rules
   * run numbers up to dbpy.read_runnumber_newest(bl) that do not exist for this
     beamline are skipped
   * the file is always rewritten atomically; a lock file stops two loggers
-    writing the same log. The logger touches the lock file on every pass (heartbeat),
-    so logger_status() can tell a running logger from a stale lock.
+    writing the same log. The logger touches the lock file while it works and after every
+    pass (heartbeat), so logger_status() can tell a running logger from a stale lock.
+  * live: the log, the motor snapshots and the scan table are saved every CHECKPOINT runs,
+    also during a long catch-up, and <output>/runlog_status.json says what the logger is
+    doing (phase, progress, newest run); logger_status() / the session's run_logger_status()
+    read both.
+  * a batch job that is stopped (qdel, walltime: SIGTERM) saves what it has and removes its lock.
 
 Parallel (offline, workers > 1; the online logger reads one run after the other): a pass
-first reads the run records of all runs with the workers, then the motor snapshots with
-whole scans per worker (inside a scan in run order, because step 1 searches all motors and
-the later steps use what it found), in batches of about CHECKPOINT runs; the log is saved
-after every batch.
+works through the runs in chunks of PASS_CHUNK runs: the run records of the chunk with the
+workers, then the motor snapshots with whole scans per worker (inside a scan in run order,
+because step 1 searches all motors and the later steps use what it found), in batches of
+about CHECKPOINT runs; the log is saved after every batch.
 """
 import atexit
 import datetime
+import json
 import math
 import os
+import signal
 import socket
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -66,6 +73,15 @@ def _jst(t: Any) -> str:
 
 def runlog_path(cfg: Config) -> str:
     return os.path.join(cfg.output_dir(), "runlog.csv")
+
+
+def status_path(log_path: str) -> str:
+    """<output>/runlog_status.json next to the log: what the logger is doing (RunLogger.note)."""
+    return os.path.join(os.path.dirname(log_path), "runlog_status.json")
+
+
+def now_jst() -> str:
+    return datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ---------------------------------------------------------------- file
@@ -205,15 +221,40 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def logger_status(cfg: Config, max_age_s: float = 60.0) -> Tuple[bool, str]:
+def read_status(log_path: str) -> Dict[str, Any]:
+    """The logger's status file ({} if there is none or it cannot be read)."""
+    try:
+        with open(status_path(log_path)) as fh:
+            return dict(json.load(fh))
+    except (OSError, ValueError):
+        return {}
+
+
+def logger_status(cfg: Config, max_age_s: float = 120.0, detail: bool = False) -> Tuple[bool, str]:
+    """(running?, text); detail=False: the first line only (see logger_status_detail)."""
+    ok, text = logger_status_detail(cfg, max_age_s)
+    return ok, text if detail else text.split("\n")[0]
+
+
+def logger_status_detail(cfg: Config, max_age_s: float = 120.0) -> Tuple[bool, str]:
     """(running?, text) for the run logger of this profile's output folder.
 
     Running: the lock file exists, its process is alive (same computer) and its heartbeat
-    is younger than max_age_s (the online logger touches it every --poll seconds).
-    A lock from another computer counts as running while its heartbeat is recent."""
-    path = runlog_path(cfg) + ".lock"
+    is younger than max_age_s (a logger touches it while it works and after every pass, i.e.
+    every --poll seconds). A lock from another computer (a batch job on a compute node) counts
+    as running while its heartbeat is recent. The text adds what the logger last reported
+    (runlog_status.json: phase, progress, PBS job) and what is in the log."""
+    log_path = runlog_path(cfg)
+    path = log_path + ".lock"
+    st = read_status(log_path)
+    content = _log_summary(log_path)
     if not os.path.exists(path):
-        return False, "no run logger running (no lock file {})".format(path)
+        last = ""
+        if st:
+            last = "; the last logger ({}{}) ended {}: {}".format(
+                st.get("owner", "?"), ", job " + st["job"] if st.get("job") else "", st.get("updated", "?"),
+                st.get("phase", "?"))
+        return False, "no run logger running (no lock file {}){}\n{}".format(path, last, content)
     try:
         with open(path) as fh:
             owner = fh.read().strip()
@@ -221,15 +262,39 @@ def logger_status(cfg: Config, max_age_s: float = 60.0) -> Tuple[bool, str]:
     except OSError as err:
         return False, "lock file not readable: {}".format(err)
     host, _, pid = owner.partition(":")
+    doing = ""
+    if st and st.get("owner") == owner:
+        doing = "\n  {}{}; {} (reported {})".format(
+            st.get("phase", "?"), " " + st["progress"] if st.get("progress") else "",
+            st.get("mode", ""), st.get("updated", "?"))
+        if st.get("job"):
+            doing += "\n  PBS job {} ({} workers)".format(st["job"], st.get("workers", "?"))
     if host == socket.gethostname():
         if not (pid.isdigit() and _alive(int(pid))):
-            return False, "stale lock file (process {} is gone): {}".format(pid, path)
+            return False, "stale lock file (process {} is gone): {}\n{}".format(pid, path, content)
         if age > max_age_s:
-            return False, "run logger {} has not updated for {:.0f} s (hanging?)".format(owner, age)
-        return True, "run logger running ({}, last pass {:.0f} s ago)".format(owner, age)
+            return False, "run logger {} has not shown a sign of life for {:.0f} s (hanging?){}\n{}".format(
+                owner, age, doing, content)
+        return True, "run logger running ({}, heartbeat {:.0f} s ago){}\n{}".format(owner, age, doing, content)
     if age > max_age_s:
-        return False, "lock from {} not updated for {:.0f} s".format(owner, age)
-    return True, "run logger running on {} (last pass {:.0f} s ago)".format(host, age)
+        return False, ("lock from {} without a sign of life for {:.0f} s (stopped or killed? a new logger takes "
+                       "it over after {:.0f} s){}\n{}").format(owner, age, STALE_S, doing, content)
+    return True, "run logger running on {} (heartbeat {:.0f} s ago){}\n{}".format(host, age, doing, content)
+
+
+def _log_summary(log_path: str) -> str:
+    """'run log <path>: N runs (first .. last), K not finished'."""
+    try:
+        df = load(log_path)
+    except Exception as err:  # noqa: BLE001  only a status text
+        return "  run log {}: not readable ({})".format(log_path, err)
+    if not len(df):
+        return "  run log {}: empty".format(log_path)
+    unfinished = int((df["runstatus"].fillna(-1) != 0).sum())
+    return "  run log {}: {} runs ({} .. {}){}; written {}".format(
+        log_path, len(df), int(df.index.min()), int(df.index.max()),
+        ", {} not finished".format(unfinished) if unfinished else "",
+        datetime.datetime.fromtimestamp(os.path.getmtime(log_path), JST).strftime("%Y-%m-%d %H:%M:%S"))
 
 
 # ---------------------------------------------------------------- logger
@@ -249,6 +314,10 @@ class RunLogger(object):
         self.heartbeat = None  # type: Any
         # called after every run read (the lock's touch: a long first pass is not "hanging")
         self.workers = 1
+        self.status = {}  # type: Dict[str, Any]
+        """What the logger reports in runlog_status.json (only while run() runs)."""
+        self._scans_mark = 0
+        """changed[:_scans_mark] are already in the scan table (update_scans at a checkpoint)"""
 
     def candidates(self) -> List[str]:
         """Motors in the snapshot of every run (read once per logger)."""
@@ -315,6 +384,22 @@ class RunLogger(object):
             return max(int(first), int(self.df.index.max()) + 1)
         return int(first)
 
+    def note(self, **fields: Any) -> None:
+        """Update runlog_status.json (only while run() runs, i.e. self.status is set)."""
+        if not self.status:
+            return
+        self.status.update(fields)
+        self.status["updated"] = now_jst()
+        self.status["logged_runs"] = int(len(self.df))
+        self.status["last_logged_run"] = int(self.df.index.max()) if len(self.df) else None
+        path = status_path(self.path)
+        try:
+            with open(path + ".tmp", "w") as fh:
+                json.dump(self.status, fh, indent=1, default=str)
+            os.replace(path + ".tmp", path)
+        except OSError:
+            pass
+
     def update_once(self, first_run: Optional[int] = None, last_run: Optional[int] = None) -> List[int]:
         """One pass: re-check unfinished runs, add new ones. Returns changed runs."""
         newest = db.newest_run(self.bl)
@@ -330,13 +415,17 @@ class RunLogger(object):
         # runs logged before motor snapshots existed are recorded once more
         candidates = sorted(set(candidates) | {int(r) for r in self.df.index if int(r) not in self.motors})
         changed = []  # type: List[int]
+        self._scans_mark = 0
+        new = [r for r in candidates if r not in self.df.index]
+        if candidates:
+            self.note(phase="catching up" if len(new) > self.CHECKPOINT else "checking",
+                      progress="0 of {} runs ({} .. {})".format(len(candidates), candidates[0], candidates[-1]),
+                      newest_run=int(newest))
         try:
             self._pass(candidates, changed)
         finally:  # also on Ctrl-C / errors: keep what was read (a new start resumes after it)
             if changed:
-                self.update_scans(changed)
-                scan.save_motors(self.motors, self.motors_path)
-                save(self.df, self.path)
+                self.save_now(changed)
         self.checked_up_to = max(newest, start - 1)
         return changed
 
@@ -354,18 +443,27 @@ class RunLogger(object):
         self.df.loc[run] = [row.get(key, math.nan if key in NUMERIC else "") for key in COLUMNS[1:]]
         return run not in self.motors or just_stopped
 
-    def _finish(self, run: int, row: Dict[str, Any], changed: List[int]) -> None:
+    def _finish(self, run: int, row: Dict[str, Any], changed: List[int], save_every: bool = True) -> None:
         row["moving"] = ";".join(names.display_name(self.cfg, m)
                                  for m in str(self.motors[run].get(scan.MOVING, "")).split(";") if m)
         self.df.at[run, "moving"] = row["moving"]
         changed.append(run)
         _print_row(row)
-        if len(changed) % self.CHECKPOINT == 0:      # checkpoint: a restart continues from here
-            self.save_now()
+        if save_every and len(changed) % self.CHECKPOINT == 0:      # checkpoint: a restart continues from here
+            self.save_now(changed)
 
-    def save_now(self) -> None:
+    def save_now(self, changed: Optional[List[int]] = None) -> None:
+        """Checkpoint: the scan table (for the runs changed since the last checkpoint), the motor
+        snapshots and the log, then the status file."""
+        if changed is not None and len(changed) > self._scans_mark:
+            self.update_scans(changed[self._scans_mark:])
+            self._scans_mark = len(changed)
         scan.save_motors(self.motors, self.motors_path)
         save(self.df, self.path)
+        if self.status and changed is not None:
+            prog = str(self.status.get("progress", ""))
+            total = prog.split(" of ", 1)[1] if " of " in prog else ""
+            self.note(progress="{} of {}".format(len(changed), total) if total else "{} runs".format(len(changed)))
 
     def _pass(self, candidates: List[int], changed: List[int]) -> None:
         if self.workers > 1 and len(candidates) > 1:
@@ -394,69 +492,90 @@ class RunLogger(object):
             job.wait(5.0)
         return job.get()
 
+    PASS_CHUNK = 100
+    """Runs whose records are read at once in a parallel pass (then their snapshots, then saved):
+    a long catch-up writes the log as it goes instead of at the end."""
+
     def _pass_parallel(self, candidates: List[int], changed: List[int]) -> None:
-        """_pass with self.workers processes (see the module text)."""
+        """_pass with self.workers processes (see the module text), PASS_CHUNK runs at a time."""
         import multiprocessing
 
         ctx = multiprocessing.get_context("spawn")
         n = self.workers
+        t0 = time.time()
         with ctx.Pool(n, initializer=_worker_init, initargs=(self.cfg.path,)) as pool:
-            t0 = time.time()
-            print("reading the records of {} runs with {} workers ...".format(len(candidates), n), flush=True)
-            chunk = max(1, min(50, len(candidates) // (4 * n) or 1))
-            rows = self._wait(pool.map_async(_record_job, [(self.bl, r) for r in candidates], chunksize=chunk))
-            records = {r: row for r, row in zip(candidates, rows) if row is not None}
-            todo = []  # type: List[int]
-            for r in sorted(records):
-                need = self._apply(r, records[r])
-                if need:
-                    todo.append(r)
-                elif need is False:                     # record updated, snapshot stays
-                    self._finish(r, records[r], changed)
-            print("records: {:.0f} s; motor snapshots of {} runs ...".format(time.time() - t0, len(todo)), flush=True)
-            # whole scans per job (their runs in order); plain runs alone
-            group_of = {}  # type: Dict[int, List[int]]
-            for g in scan.group_runs(self.df):
-                for r in g:
-                    group_of[r] = g
-            jobs = []  # type: List[List[int]]
-            seen = set()  # type: Set[int]
-            for r in todo:
-                if r in seen:
-                    continue
-                g = group_of.get(r, [r])
-                runs = [x for x in g if x in todo]
-                seen.update(runs)
-                jobs.append(runs)
-            # batches of about CHECKPOINT runs, saved after each
-            batch = []  # type: List[List[int]]
-            batches = []  # type: List[List[List[int]]]
-            for job in jobs:
-                batch.append(job)
-                if sum(len(j) for j in batch) >= self.CHECKPOINT:
-                    batches.append(batch)
-                    batch = []
-            if batch:
+            print("{} runs to read ({} .. {}) with {} workers, {} at a time".format(
+                len(candidates), candidates[0], candidates[-1], n, self.PASS_CHUNK), flush=True)
+            for i in range(0, len(candidates), self.PASS_CHUNK):
+                self._chunk_parallel(pool, candidates[i:i + self.PASS_CHUNK], changed)
+        print("pass done: {} runs logged or updated in {:.0f} s".format(len(changed), time.time() - t0), flush=True)
+
+    def _chunk_parallel(self, pool: Any, chunk: List[int], changed: List[int]) -> None:
+        """Records of the runs of ``chunk``, then their motor snapshots (whole scans per job, earlier
+        steps of a scan from previous chunks are already in self.motors), saved every batch."""
+        n = self.workers
+        t0 = time.time()
+        part = max(1, min(50, len(chunk) // (4 * n) or 1))
+        rows = self._wait(pool.map_async(_record_job, [(self.bl, r) for r in chunk], chunksize=part))
+        records = {r: row for r, row in zip(chunk, rows) if row is not None}
+        todo = []  # type: List[int]
+        for r in sorted(records):
+            need = self._apply(r, records[r])
+            if need:
+                todo.append(r)
+            elif need is False:                     # record updated, snapshot stays
+                self._finish(r, records[r], changed, save_every=False)
+        print("runs {} .. {}: {} records ({:.0f} s), motor snapshots of {} runs ...".format(
+            chunk[0], chunk[-1], len(records), time.time() - t0, len(todo)), flush=True)
+        # whole scans per job (their runs in order); plain runs alone
+        group_of = {}  # type: Dict[int, List[int]]
+        for g in scan.group_runs(self.df):
+            for r in g:
+                group_of[r] = g
+        jobs = []  # type: List[List[int]]
+        seen = set()  # type: Set[int]
+        for r in todo:
+            if r in seen:
+                continue
+            g = group_of.get(r, [r])
+            runs = [x for x in g if x in todo]
+            seen.update(runs)
+            jobs.append(runs)
+        # batches of about CHECKPOINT runs, saved after each
+        batch = []  # type: List[List[int]]
+        batches = []  # type: List[List[List[int]]]
+        for job in jobs:
+            batch.append(job)
+            if sum(len(j) for j in batch) >= self.CHECKPOINT:
                 batches.append(batch)
-            for b in batches:
-                payloads = []  # type: List[Any]
-                for runs in b:
-                    g = group_of.get(runs[0], runs)
-                    sub = self.df.loc[[x for x in g if x in self.df.index]]
-                    payloads.append((sub, {x: self.motors[x] for x in g if x in self.motors}, runs))
-                results = self._wait(pool.map_async(_snapshot_job, payloads, chunksize=1))
-                for snaps in results:
-                    for r in sorted(snaps):
-                        self.motors[r] = snaps[r]
-                        self._finish(r, records[r], changed)
-                self.save_now()
-            print("motor snapshots done ({:.0f} s in total)".format(time.time() - t0), flush=True)
+                batch = []
+        if batch:
+            batches.append(batch)
+        for b in batches:
+            payloads = []  # type: List[Any]
+            for runs in b:
+                g = group_of.get(runs[0], runs)
+                sub = self.df.loc[[x for x in g if x in self.df.index]]
+                payloads.append((sub, {x: self.motors[x] for x in g if x in self.motors}, runs))
+            results = self._wait(pool.map_async(_snapshot_job, payloads, chunksize=1))
+            for snaps in results:
+                for r in sorted(snaps):
+                    self.motors[r] = snaps[r]
+                    self._finish(r, records[r], changed, save_every=False)
+            self.save_now(changed)
+        if not batches and changed:
+            self.save_now(changed)
+
+    def finished(self, last_run: int) -> bool:
+        """Run last_run is in the log and stopped."""
+        return last_run in self.df.index and scan._num(self.df.at[last_run, "runstatus"]) == 0
 
     def run(self, follow: bool = False, poll: float = 5.0, rebuild: bool = False,
             first_run: Optional[int] = None, last_run: Optional[int] = None, workers: int = 1) -> None:
-        """Update the log. follow=True: keep watching for new runs (Ctrl-C stops).
-        rebuild=True: start from first_run with an empty log. workers > 1: read with that many
-        processes (offline; capped at the job's cores)."""
+        """Update the log. follow=True: keep watching for new runs (Ctrl-C stops; with last_run:
+        until that run is logged and stopped). rebuild=True: start from first_run with an empty log.
+        workers > 1: read with that many processes (offline; capped at the job's cores).
+        SIGTERM (qdel, the end of a batch job's walltime) stops it like Ctrl-C: the log is saved."""
         from silas.core import runner
 
         last_run = last_run or self.cfg.get("last_run", None)
@@ -465,25 +584,52 @@ class RunLogger(object):
         lock = _Lock(self.path)
         lock.acquire()
         self.heartbeat = lock.touch
+        mode = "following new runs" if follow else "one pass"
+        if last_run is not None:
+            mode += ", up to run {}".format(last_run)
+        self.status = {"owner": lock.me, "job": os.environ.get("PBS_JOBID", ""), "pid": os.getpid(),
+                       "started": now_jst(), "mode": mode, "poll_s": poll, "workers": self.workers,
+                       "log": self.path}
+        old_term = None  # type: Any
+        try:
+            old_term = signal.signal(signal.SIGTERM, _sigterm)
+        except ValueError:          # not the main thread: no handler
+            pass
         try:
             if rebuild:
                 self.df = empty()
                 self.motors = {}
                 self.checked_up_to = None
                 save(self.df, self.path)
-            print("run log: {}  (beamline {}, {})".format(
-                self.path, self.bl, "following new runs, Ctrl-C to stop" if follow else "one pass"))
+            print("run log: {}  (beamline {}, {}{})".format(
+                self.path, self.bl, mode, ", Ctrl-C to stop" if follow else ""))
             print("scans:   {}".format(self.scans_path))
+            print("status:  {} (run_logger_status() in the session)".format(status_path(self.path)), flush=True)
             self.update_once(first_run, last_run)
             lock.touch()
-            while follow:
+            while follow and not (last_run is not None and self.finished(int(last_run))):
+                self.note(phase="waiting for new runs", progress="")
                 time.sleep(poll)
                 self.update_once(first_run, last_run)
                 lock.touch()
+            self.note(phase="finished", progress="")
+            print("run log up to date{}".format(" (stopped after run {})".format(last_run) if last_run else ""))
         except KeyboardInterrupt:
-            print("\nstopped; log is up to date in {}".format(self.path))
+            self.note(phase="stopped (Ctrl-C / SIGTERM)", progress="")
+            print("\nstopped; log is up to date in {}".format(self.path), flush=True)
+        except Exception as err:
+            self.note(phase="crashed: {}".format(err), progress="")
+            raise
         finally:
+            if old_term is not None:
+                signal.signal(signal.SIGTERM, old_term)
             lock.release()
+            self.status = {}
+
+
+def _sigterm(signum: int, frame: Any) -> None:
+    """qdel / walltime: stop like Ctrl-C (the log is saved, the lock removed)."""
+    raise KeyboardInterrupt()
 
 
 # ---------------------------------------------------------------- parallel workers (offline)

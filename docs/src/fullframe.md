@@ -3,8 +3,9 @@
 The [scan analysis](scans.md) follows a few regions of the detector (ROIs) through a scan.
 The **full-frame reduction** does the same analysis for **every pixel** of the chosen panels
 and saves the results as images: one image per scan step and pump state (and per time-tool
-bin), unreferenced and referenced shot by shot. The point is to take the images home and
-look for signal anywhere on the detector, not only where the ROIs were.
+bin), unreferenced and referenced shot by shot, together with the values of the point detectors
+for every shot. The point is to take the images home and look for signal anywhere on the
+detector, not only where the ROIs were.
 
 It reads every shot of the scan and computes statistics over millions of pixels, so it runs
 on the HPC as a **batch job** (minutes for two panels, longer for all eight panels of an octal),
@@ -21,6 +22,7 @@ img = ff.image("raw", step=10, state="on")      # median image (panels, rows, co
 ratio, lo, hi = ff.onoff("i0_1", step=10)       # pump on / off of the medians, per i0 referenced
 diff, lo, hi = ff.difference("i0_1", step=10)   # pump on - off of the medians (stat="mean": of the means)
 plt.imshow(ff.assemble(ratio))                  # the panels in their detector positions
+ff.points["i0_2"]                               # a point detector, every shot (the rows of ff.shots)
 ```
 
 ## Before a reduction
@@ -99,11 +101,20 @@ bins as the ROI analysis (the same shots, grid and bin width). Per bin, pump on 
 
 Pixels where a ratio is not a number (x / 0 in an empty pixel) are left out of its statistics,
 as in the ROI binning. **Sparse bins**: bins with fewer than `min_shots` shots (default: the
-`sparse_min` of `set_tt_bins`, 20) are in the bin table but get **no images** (NaN): images of a
+`sparse_min` of `set_tt_bins`: 20, 30 in the BL3 standard config) are in the bin table but get **no images** (NaN): images of a
 few shots are mostly noise and as large as any other. `min_shots=1` computes every bin. The
 pump-off shots per step are the `off` images of the steps.
 
 Without a pump detector there is one state, `all`, and no on / off.
+
+**Point detectors.** Every point detector of the config is stored for **every shot** (read with
+the shot flags, NaN where it was not recorded), except the X-ray shutter (`set_xfel_shutter`) and
+the pump detector, whose values are the shot table's `use` and `state`, and the scanned motor,
+whose value is the step's `x`. They are labelled by their alias (else the true name, with `/`
+replaced by `_`, as the references). Per step and pump state, over the shots that are in the
+images, the reduction also stores `n`, `mean`, `std` and the `q16` / `median` / `q84` quantiles
+of each (`point_steps`). For time-tool bins or any other grouping, use the per-shot values with
+the shot table (see [Point detectors](#point-detectors) below).
 
 ## Running it
 
@@ -194,46 +205,157 @@ the first and last step and their on / off ratios, assembled).
 | `bins/diff_raw`, `bins/diff_per_<R>` | (bin, stat, panel, row, col) | step-wise on − off per bin |
 | `step_table` | one column per dataset | `x`, `step`, `value`, `runs`, `n_read`, `n_unreadable`, `n_<s>`, `n_<s>_<R>`, `<R>_<s>_q16/_median/_q84` (the reference's quantiles), `n_pairs…` |
 | `bin_table` | one column per dataset | `bin`, `t_pulse`, `t_ps`, `t_ps_median`, `n`, `computed` (has images), `n_read`, `n_<R>`, `n_onoff` |
-| `shots` | one column per dataset | the shot table: `run`, `tag`, `step`, `value`, `use`, `state`, `read`, `ref_<R>`, `step_index`; with binning the timing columns and `bin` |
-| attribute `info` | JSON | scan, runs, array, `panel_numbers`, `panels`, `detector_info` and `geometry` (to assemble the panels), corrections, keV per ADU, photon energy, states, references, options, binning, shot counts, `layout`, timing |
+| `shots` | one column per dataset | the shot table: `run`, `tag`, `step`, `value`, `use`, `state`, `read` (in the images), `ref_<R>`, `step_index` (row of `step_table`); with binning the timing columns and `bin` (the bin number, `bin_table/bin`) |
+| `point_detectors/<label>` | (shot,) | a point detector's value in every shot, in the rows of `shots` (NaN: not recorded); attributes `detector` (true name), `alias`, `unit` |
+| `point_steps` | one column per dataset | per step (the rows of `step_table`): `<label>_<s>_n`, `_mean`, `_std`, `_q16`, `_median`, `_q84` over the shots in the images |
+| attribute `info` | JSON | scan (`motor` = alias, `motor_true`), runs, array, `panel_numbers`, `panels`, `detector_info` and `geometry` (to assemble the panels), corrections, keV per ADU, photon energy, states, references, `point_detectors` (label → detector, alias, unit), options, binning, shot counts, `layout`, timing |
 
 The axes: state 0 = `on`, 1 = `off` (or 0 = `all`); stat 0..3 = `q16`, `median`, `q84`, `mean`
 (attribute `stats` of every dataset); the step index is the row of `step_table` (sorted by
-`x`, the motor value), the bin index the row of `bin_table`. Images are in the panels' own
-pixels (as `read_det_data`), not assembled; NaN where nothing was computed.
+`x`, the motor value), the bin index the row of `bin_table` (its column `bin` is the bin number,
+which the shots' `bin` refers to). Both count from 0; only the viewer's `step=` counts from 1.
+Images are in the panels' own pixels (as `read_det_data`), not assembled (see [Assembling the
+panels](#assembling-the-panels)); NaN where nothing was computed.
 
-### Reading it
+## Working with the results
 
-In the session, or at home with the SILAS package (needs h5py, numpy, pandas):
+A short version of the examples in `notebooks/start_here.ipynb` (section "Full-frame analysis").
+
+### With SILAS
+
+In the session (`load_full_frame`), or at home with the SILAS package (needs h5py, numpy, pandas):
 
 ```python
 from silas.offline.fullframe import FullFrame
-ff = FullFrame("fullframe_1234501_p78.h5")         # in the session: load_full_frame(1234501)
-ff.steps                                           # the step table (pandas)
-ff.image("raw", step=0, state="off", stat="mean")  # (panels, rows, cols)
-ff.image("i0_1", step=10, state="on")              # pixel / i0_1 per shot, median
-ff.onoff("raw", step=10)                           # (ratio, lower error, upper error)
-ff.difference("raw", step=10)                      # (on - off, lower error, upper error)
-ff.step_referenced("i0_1", step=10)                # median pixel / median i0_1 (step_reference)
-ff.image("pairs_i0_1", step=10)                    # nearest-off pairs (pairs); "pairs_diff_i0_1": on - off
-ff.bins                                            # the bin table; ff.image("onoff_i0_1", bin=3), ff.image("diff", bin=3)
+ff = FullFrame("fullframe_1234501_p78.h5")         # in the session: ff = load_full_frame(1234501)
+ff.steps                                           # the step table (pandas); ff.info: the metadata
+ff.info["scan"]["motor"]                           # the scanned motor (alias); "motor_true": true name
+
+step, ref = 10, "i0_1"                             # the ROW of ff.steps; "raw" or a reference label
+on = ff.image(ref, step=step, state="on")          # (panels, rows, cols), median; stat="mean" for weak signals
+off = ff.image(ref, step=step, state="off", stat="mean")
+ratio, lo, hi = ff.onoff(ref, step=step)           # on / off of the medians with errors
+diff, lo, hi = ff.difference(ref, step=step)       # on - off of the medians; stat="mean": of the means
+ff.step_referenced(ref, step=step)                 # median pixel / median i0_1 (only with step_reference)
+ff.image("pairs_i0_1", step=step)                  # nearest-off pairs (only with pairs); "pairs_diff_i0_1": on - off
 ff.stack("raw", state="on", stat="mean")           # all steps: (steps, panels, rows, cols)
-ff.assemble(ff.image("raw", step=10))              # 2-D image in detector geometry (gaps NaN)
+plt.imshow(ff.assemble(ratio))                     # 2-D image in detector geometry (gaps NaN)
+
+if ff.bins is not None:                            # time-tool bins (with binning)
+    i = 3                                          # the ROW of ff.bins (computed 0: no images, NaN)
+    ff.bins["t_ps"].iloc[i]                        # its time (ps)
+    ff.image(ref, bin=i)                           # pump on; "onoff_i0_1" / "diff_i0_1": step-wise on / off, on - off
 ff.close()
 ```
 
-Without the package, h5py alone:
+### Point detectors
+
+```python
+ff.point_info                                      # {label: {"detector": true name, "alias", "unit"}}
+ff.points["i0_2"]                                  # every shot, in the rows of ff.shots (NaN: not recorded)
+shots = ff.shots.join(ff.points)                   # with run, tag, step_index, state, read, bin, ...
+used = shots[shots["read"].astype(bool)]           # the shots in the images
+used.groupby(["step_index", "state"])["i0_2"].mean()          # state 0 = on, 1 = off
+used[used["bin"] == ff.bins["bin"].iloc[3]]["i0_2"].median()  # the shots of a time-tool bin
+ff.point_steps["i0_2_on_mean"]                     # per step, already computed (rows of ff.steps)
+```
+
+### Without SILAS
+
+h5py and numpy alone (e.g. on a laptop without the package):
 
 ```python
 import h5py, json
 with h5py.File("fullframe_1234501_p78.h5", "r") as f:
     info = json.loads(f.attrs["info"])
-    median_on_step10 = f["steps/raw"][10, 0, 1]     # step 10, pump on, median: (panels, rows, cols)
-    x = f["step_table/x"][()]                       # motor value of every step
+    st, stats = info["states"], info["stats"]                 # ["on", "off"], ["q16", "median", "q84", "mean"]
+    on = f["steps/per_i0_1"][10, st.index("on"), stats.index("median")]    # (panels, rows, cols)
+    x = f["step_table/x"][()]                                 # motor value of every step
+    bin_onoff = f["bins/onoff_per_i0_1"][3, stats.index("mean")]           # with binning; bins: no state axis
+    i0 = f["point_detectors/i0_2"][()]                        # one value per shot
+    step_index, state = f["shots/step_index"][()], f["shots/state"][()]
+img = assemble(on, info)                                      # see Assembling the panels
 ```
 
 Reading one image reads only that image from the file (one compressed chunk per panel), so
 large files are fine to browse.
+
+## Assembling the panels
+
+The images are stored per panel, in the panels' own pixels. `ff.assemble(image)` puts them where
+they are on the detector, exactly as the [MPCCD viewer](mpccd-viewer.md) and the full-frame viewer
+do (`silas.core.geometry`):
+
+- **Where the panels are**: from the detector info of each panel that stpy gives with the data
+  (stored in the file's `info["detector_info"]`): the position of the panel's first pixel
+  (`mp_posx`, `mp_posy`, µm; the centre of its top-left pixel), its rotation
+  (`mp_rotationangle`, degrees, counterclockwise), the pixel size, and the opening of the
+  aperture (`mp_manipulator_shift` × `mp_shiftweight` along `mp_stagedirection`).
+- **On top of that**, the geometry corrections of the MPCCD array as they were when the
+  reduction ran (`info["geometry"]`: the per-panel offsets tuned in the viewer, the rounding and
+  the sub-pixel shift); the panel offsets are renumbered to the stored panels.
+- **The image**: detector X to the right and Y up, the detector origin (X = Y = 0, the beam axis
+  if the detector is centred) in the centre pixel, the panels' pixel size. Every image pixel
+  takes the value of the nearest panel pixel (an inverse map, as `ippy.reconstruction`: no holes,
+  no pixel used twice); between the panels NaN. Only the stored panels are drawn, so the
+  image of panels 7 and 8 is as large as the detector but mostly NaN: crop to the finite part.
+- **No rescaling**: the values are keV already (each panel with its own keV per ADU), so unlike
+  the raw MPCCD view no gain normalisation is applied.
+
+`ff.assemble` works on anything with the shape (panels, rows, cols): images, ratios, error
+images, a mask. Without SILAS, this function (numpy only) gives the same image; it is tested
+against `silas.core.geometry` with rotated, shifted panels and every rounding:
+
+```python
+import math
+import numpy as np
+
+
+def assemble(panels, info):
+    """(panels, rows, cols) -> one 2-D image in detector geometry, as ff.assemble: detector origin
+    in the centre pixel, X to the right, Y up, nearest panel pixel, NaN between the panels.
+    info: json.loads(f.attrs["info"]) of the full-frame file."""
+    geo, det = info["geometry"], info["detector_info"]
+    offsets = geo.get("panel_offsets") or {}
+    rnd = {"floor": np.floor, "trunc": np.trunc, "rint": np.rint}[geo.get("rounding", "floor")]
+    sub_r, sub_c = geo.get("sub_pixel", (0.0, 0.0))
+    shift = float(det[0].get("mp_manipulator_shift", 0.0))          # aperture opening (um)
+    n, h, w = np.shape(panels)
+    pos = []                                                          # (x0, y0, angle, pixel) per panel
+    for k, d in enumerate(det):
+        off = offsets.get(str(k + 1)) or {}
+        a = math.radians(float(d.get("mp_stagedirection", 0.0)))
+        s = float(d.get("mp_shiftweight", 0.0)) * shift
+        pix = float(d.get("mp_pixelsizex", d.get("mp_pixelsize_x", 50.0)))
+        pos.append((float(d["mp_posx"]) + float(off.get("dx_um", 0.0)) + math.cos(a) * s,
+                    float(d["mp_posy"]) + float(off.get("dy_um", 0.0)) + math.sin(a) * s,
+                    math.radians(float(d["mp_rotationangle"]) + float(off.get("drot_deg", 0.0))), pix))
+
+    def corners(x0, y0, th, pix):                                     # X, Y (um) of the corner pixel centres
+        u = np.array([0.0, w - 1, 0.0, w - 1])
+        v = -np.array([0.0, 0.0, h - 1, h - 1])
+        return (x0 + pix * (u * math.cos(th) - v * math.sin(th)),
+                y0 + pix * (u * math.sin(th) + v * math.cos(th)))
+
+    pix0 = pos[0][3]
+    cs = [corners(*p) for p in pos]
+    half_r = int(math.ceil(max(np.abs(y).max() for _, y in cs) / pix0)) + 2
+    half_c = int(math.ceil(max(np.abs(x).max() for x, _ in cs) / pix0)) + 2
+    image = np.full((2 * half_r + 1, 2 * half_c + 1), np.nan, np.float32)
+    for k, ((x0, y0, th, pix), (x, y)) in enumerate(zip(pos, cs)):
+        c_lo = max(int(math.floor(x.min() / pix0)) + half_c - 1, 0)
+        c_hi = min(int(math.ceil(x.max() / pix0)) + half_c + 1, image.shape[1] - 1)
+        r_lo = max(int(math.floor(-y.max() / pix0)) + half_r - 1, 0)
+        r_hi = min(int(math.ceil(-y.min() / pix0)) + half_r + 1, image.shape[0] - 1)
+        rr, cc = np.mgrid[r_lo:r_hi + 1, c_lo:c_hi + 1]
+        dx = ((cc - half_c) * pix0 - x0) / pix                        # image pixel -> panel pixel
+        dy = (-(rr - half_r) * pix0 - y0) / pix
+        col = rnd(dx * math.cos(th) + dy * math.sin(th) + sub_c).astype(int)
+        row = rnd(dx * math.sin(th) - dy * math.cos(th) + sub_r).astype(int)
+        ok = (row >= 0) & (row < h) & (col >= 0) & (col < w)
+        image[rr[ok], cc[ok]] = np.asarray(panels[k], np.float32)[row[ok], col[ok]]
+    return image
+```
 
 ## The viewer
 
@@ -287,5 +409,7 @@ says which step that is.
 `tests/test_fullframe.py` (laptop, fake dbpy / stpy): for a simulated scan, every statistic of
 every step, state and reference, the pairs, the step reference, the on / off ratios and the
 time-tool bins are compared with numpy on the brute-force corrected images (a sample of 4000
-pixels per image), the ROI's mean is checked against the ROI analysis, only the chosen panels
-must be read, and the statistics in real worker processes must give the same file.
+pixels per image), the ROI's mean is checked against the ROI analysis, the point detectors per shot
+and per step against the fake values, only the chosen panels must be read, and the statistics in
+real worker processes must give the same file. It is not part of `check_and_sync.sh` (it takes a
+few minutes): run it with `python tests/test_fullframe.py` after changing the reduction.

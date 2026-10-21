@@ -66,7 +66,7 @@ start_scan_viewer()                 # new terminal, MPI: 1 display + 4 readers
 start_scan_viewer(workers=8)        # more readers
 start_scan_viewer(scan=1234501)     # follow a fixed scan (as scan_info) instead of the newest
 start_scan_viewer(test=True)        # simulated scans (the default on a laptop)
-logger_status()                     # is the run logger running?
+run_logger_status()                 # is the run logger running?
 ```
 
 The viewer follows the **newest scan** of the run log: when a new scan starts it clears the

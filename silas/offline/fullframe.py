@@ -37,6 +37,10 @@ corrections and the same statistics:
     table but get no images (NaN); min_shots=1 computes every bin. Non-finite values (x / 0 in
     an empty pixel) are left out of the statistics of ratios, as in the ROI binning.
 
+Point detectors: every point detector of the config (except the X-ray shutter, the pump detector
+and the scanned motor) per shot, in the rows of the shot table, and per step and pump state
+(n, mean, std and the quantiles over the shots used in the images): FullFrame.points, .point_steps.
+
 Panels: only the chosen panels are read and stored (set_ff_panels, or panels=...; default all).
 
 How (memory): one group of shots at a time (a scan step, later a time-tool bin). Its raw
@@ -61,7 +65,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 import silas  # noqa: F401  first silas import: applies the profile's sys.path
-from silas.core import energy, mpccd, sacla, scan, scanroi
+from silas.core import energy, mpccd, sacla, scan, scanroi  # noqa: F401
 from silas.core.config import Config
 
 STATS = ("q16", "median", "q84", "mean")
@@ -169,15 +173,20 @@ def _reader(bl: int, det_ids: Sequence[str]) -> Any:
     return _WORKER["reader"]
 
 
-def _flags_job(payload: Tuple[int, int, List[int]]) -> Dict[str, Any]:
-    """Shot flags of one run (scan_analysis.shot_flags) as lists."""
+def _flags_job(payload: Tuple[int, int, List[int], List[str]]) -> Dict[str, Any]:
+    """Shot flags of one run (scan_analysis.shot_flags) and the values of the point detectors
+    (true names; "pd:<name>", NaN where not recorded), as arrays."""
+    from silas.core import db
     from silas.offline.scan_analysis import shot_flags
 
-    run, taghi, tags = payload
+    run, taghi, tags, points = payload
     cfg = _WORKER.get("cfg") or Config()
     _WORKER["cfg"] = cfg
     flags = shot_flags(cfg, cfg.beamline, int(run), int(taghi), tags)
-    return {k: np.asarray(v) for k, v in flags.items()}
+    out = {k: np.asarray(v) for k, v in flags.items()}
+    for name in points:
+        out["pd:" + name] = np.asarray(db.read_point(name, int(taghi), tags, errors="nan"), np.float64)
+    return out
 
 
 def _load_job(payload: Dict[str, Any]) -> Tuple[List[int], int, float]:
@@ -349,6 +358,16 @@ def _put_table(group: Any, frame: Any) -> None:
         group.create_dataset(str(col), data=data)
 
 
+def _put_points(group: Any, points: Any, meta: Dict[str, Dict[str, str]]) -> None:
+    """Per-shot point-detector values: one float64 dataset per detector (the label: alias, no "/"),
+    in the row order of the shot table; attributes detector (true name), alias, unit (text, "" if
+    none: HDF5 attributes cannot be None)."""
+    for label in points.columns:
+        ds = group.create_dataset(str(label), data=points[label].to_numpy(np.float64))
+        for k, v in (meta.get(str(label)) or {}).items():
+            ds.attrs[k] = str(v or "")
+
+
 def _image_dataset(f: Any, name: str, lead: Sequence[int], dims: str, panel_shape: Sequence[int]) -> Any:
     """Float32 image dataset of shape lead + (4 stats, panels, rows, cols), one panel image per
     chunk, gzip; unwritten parts read as NaN."""
@@ -466,17 +485,20 @@ class Reduction(object):
         self.corr = corr
         self.dark = corr.dark
         self.thr = corr.threshold_adu.reshape(-1) if corr.settings.get("threshold") else None
-        # shot flags of every run (dbpy), in the workers
+        # shot flags and point-detector values of every run (dbpy), in the workers
+        self.points_meta = self._point_detector_selection()
+        true_names = [m["detector"] for m in self.points_meta.values()]
         by_run = {}  # type: Dict[int, List[int]]
         for run, tag in job["items"]:
             by_run.setdefault(int(run), []).append(int(tag))
         t0 = time.time()
-        payloads = [(run, int(job["run_info"][run].get("taghi") or 0) or _taghi(cfg, run), tags)
+        payloads = [(run, int(job["run_info"][run].get("taghi") or 0) or _taghi(cfg, run), tags, true_names)
                     for run, tags in sorted(by_run.items())]
         flags = self.pool.map(_flags_job, payloads)
         self._add_time("flags", time.time() - t0)
         parts = []
-        for (run, _, tags), fl in zip(payloads, flags):
+        point_parts = []
+        for (run, _, tags, _), fl in zip(payloads, flags):
             info = job["run_info"][run]
             d = {"run": np.full(len(tags), run, np.int64), "tag": np.asarray(tags, np.int64),
                  "step": info.get("step"), "value": info.get("value"),
@@ -485,7 +507,10 @@ class Reduction(object):
             for label in self.labels:
                 d["ref_" + label] = np.asarray(fl["ref_" + label], np.float64)
             parts.append(pd.DataFrame(d))
+            point_parts.append(pd.DataFrame({label: np.asarray(fl["pd:" + m["detector"]], np.float64)
+                                             for label, m in self.points_meta.items()}, index=range(len(tags))))
         self.shots = pd.concat(parts, ignore_index=True)
+        self.points = pd.concat(point_parts, ignore_index=True)          # same rows as self.shots
         self.template = scanroi.step_table(scanroi.ScanSums(1, self.n_states), self.sc["runs"])
         step_of_run = {}
         for j, st in enumerate(self.template):
@@ -745,6 +770,8 @@ class Reduction(object):
                       sc["scan_id"], len(sc["runs"]), len(self.template), len(self.shots), len(self.sel),
                       ",".join(str(k + 1) for k in self.sel), self.key, "x".join(str(s) for s in self.panel_shape[1:]),
                       ", ".join(self.labels) or "none", self.pump or "none"), flush=True)
+            print("point detectors (per shot and per step): {}".format(", ".join(self.points_meta) or "none"),
+                  flush=True)
             print("steps: {} images (all chosen panels) of {:.1f} MB = {:.1f} GB before compression{}; largest "
                   "step {} shots: buffer {:.1f} GB; {} worker processes".format(
                       n_img, per_image / 1e6, n_img * per_image / 1e9,
@@ -768,6 +795,9 @@ class Reduction(object):
                 _put_table(f.create_group("step_table"), self.step_frame)
                 if tt is not None:
                     _put_table(f.create_group("bin_table"), tt["table"])
+                if self.points_meta:
+                    _put_points(f.create_group("point_detectors"), self.points, self.points_meta)
+                    _put_table(f.create_group("point_steps"), self.point_step_table())
                 f.attrs["info"] = json.dumps(info, default=_json_default)
                 f.attrs["stats"] = json.dumps(list(STATS))
                 f.attrs["quantiles"] = np.asarray(scanroi.QUANTILES)
@@ -811,6 +841,10 @@ class Reduction(object):
             layout["bins/raw"] = "bin, stat, panel, row, col (pump-on shots)"
             layout["bins/onoff_raw"] = "bin, stat, panel, row, col (shot / median off image of its step)"
             layout["bins/diff_raw"] = "bin, stat, panel, row, col (shot - median off image of its step)"
+        if self.points_meta:
+            layout["point_detectors/<label>"] = "shot (the rows of shots): the detector's value, NaN if not recorded"
+            layout["point_steps"] = ("step (the rows of step_table): <label>_<state>_n / _mean / _std / _q16 / "
+                                     "_median / _q84 over the shots used in the images")
         info = {"what": "full-frame reduction", "file": os.path.basename(path),
                 "scan": {k: v for k, v in self.sc.items() if k != "runs"}, "runs": self.sc["runs"],
                 "array": self.key, "panel_numbers": [k + 1 for k in self.sel], "panels": self.det_ids,
@@ -823,6 +857,7 @@ class Reduction(object):
                 "states": names, "pump_detector": self.pump, "pump_on_value": self.on_value,
                 "references": {label: {"detector": true, "unit": str((point.get(true) or {}).get("unit") or "")}
                                for label, true in self.refs},
+                "point_detectors": self.points_meta,
                 "stats": list(STATS), "quantiles": list(scanroi.QUANTILES),
                 "units": "keV per pixel per shot (per reference unit when referenced)",
                 "x_is_value": self.x_is_value,
@@ -837,6 +872,59 @@ class Reduction(object):
                 "layout": layout, "made": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "timing_s": dict(self.timing)}
         return info
+
+    # ------------------------------------------------------------ point detectors
+    def _point_detector_selection(self) -> Dict[str, Dict[str, str]]:
+        """{label: {"detector": true name, "alias", "unit"}} of the point detectors stored per shot:
+        every point detector of the config except the X-ray shutter, the pump detector (their
+        values are the shot table's use / state) and the scanned motor (the step's x / value).
+        label: the alias (else the true name) with "/" replaced, as the reference labels."""
+        from silas.core import names
+        from silas.offline.scan_analysis import XRAY_SHUTTER
+
+        point = self.cfg.get("point_detectors", {}) or {}
+        skip = set()
+        for name in (self.cfg.get(XRAY_SHUTTER, None), self.pump, self.sc.get("motor_true")):
+            if name:
+                skip.add(names.resolve(self.cfg, str(name)))
+        out = {}  # type: Dict[str, Dict[str, str]]
+        for true in sorted(point):
+            if true in skip:
+                continue
+            entry = point.get(true) or {}
+            label = str(entry.get("alias") or true).replace("/", "_")
+            while label in out:                         # an alias equal to another's true name
+                label += "_"
+            out[label] = {"detector": str(true), "alias": str(entry.get("alias") or ""),
+                          "unit": str(entry.get("unit") or "")}
+        return out
+
+    def point_step_table(self) -> Any:
+        """Per step (the rows of the step table) and state, over the shots used in the images (read):
+        n, mean, std, q16, median, q84 of every point detector (non-finite values left out)."""
+        import pandas as pd
+
+        names_ = list(STATE_NAMES) if self.n_states == 2 else ["all"]
+        step_i = self.shots["step_index"].to_numpy(np.int64)
+        state = self.shots["state"].to_numpy(np.int64)
+        read = self.shots["read"].to_numpy(bool)
+        rows = []  # type: List[Dict[str, Any]]
+        for j in range(len(self.template)):
+            row = {"step": self.template[j]["step"], "x": self.template[j]["x"]}  # type: Dict[str, Any]
+            for s, sname in enumerate(names_):
+                m = read & (step_i == j) & (state == s)
+                for label in self.points_meta:
+                    v = self.points[label].to_numpy(np.float64)[m]
+                    v = v[np.isfinite(v)]
+                    key = "{}_{}_".format(label, sname)
+                    row[key + "n"] = int(len(v))
+                    row[key + "mean"] = float(np.mean(v)) if len(v) else math.nan
+                    row[key + "std"] = float(np.std(v)) if len(v) else math.nan
+                    qa = np.quantile(v, list(scanroi.QUANTILES)) if len(v) else [math.nan] * 3
+                    for qn, q in zip(("q16", "median", "q84"), qa):
+                        row[key + qn] = float(q)
+            rows.append(row)
+        return pd.DataFrame(rows)
 
 
 def _taghi(cfg: Config, run: int) -> int:
@@ -869,6 +957,8 @@ class FullFrame(object):
         d, lo, hi = ff.difference("raw", step=10) # pump on - off of the medians (stat="mean": of the means)
         ff.image("raw", bin=3)                    # a time-tool bin (pump on); ff.image("onoff", bin=3)
         img = ff.assemble(ratio)                  # one 2-D image of the panels (detector geometry)
+        ff.points["i0_2"]                         # a point detector, every shot (the rows of ff.shots)
+        ff.point_steps                            # per step and state: <label>_<state>_mean, _median, ...
 
     kind: "raw", a reference label (pixel / R per shot), "raw_with_<label>" (step_reference),
     "pairs" / "pairs_<label>" and "pairs_diff" / "pairs_diff_<label>" (steps, pairs option: on / off and
@@ -888,6 +978,9 @@ class FullFrame(object):
         self.shots = self._table("shots")
         self.steps = self._table("step_table")
         self.bins = self._table("bin_table") if "bin_table" in self.f else None  # type: Any
+        self.point_info = dict(self.info.get("point_detectors") or {})  # type: Dict[str, Dict[str, str]]
+        self.points = self._points()
+        self.point_steps = self._table("point_steps") if "point_steps" in self.f else None  # type: Any
         self._geom = None  # type: Any
 
     def _table(self, name: str) -> Any:
@@ -900,6 +993,16 @@ class FullFrame(object):
                 v = v.astype(str)
             data[k] = v
         return pd.DataFrame(data)
+
+    def _points(self) -> Any:
+        """Per-shot point-detector values (one column per label), the rows of self.shots."""
+        import pandas as pd
+
+        if "point_detectors" not in self.f:
+            return pd.DataFrame(index=self.shots.index)
+        g = self.f["point_detectors"]
+        order = [k for k in self.point_info if k in g] + sorted(k for k in g if k not in self.point_info)
+        return pd.DataFrame({k: np.asarray(g[k][()], np.float64) for k in order}, index=self.shots.index)
 
     def _dataset(self, kind: str, binned: bool) -> Tuple[Any, bool]:
         """(dataset, has a state axis)."""

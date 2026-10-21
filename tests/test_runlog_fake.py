@@ -4,14 +4,16 @@
     python tests/test_runlog_fake.py
 
 Fake beamline: runs 100..110, run 105 belongs to another beamline (does not
-exist here), run 110 is still running. Then run 110 stops and 111 appears.
+exist here), run 110 is still running. Then run 110 stops and 111 appears. Then the batch-job
+behaviour: a parallel pass in chunks saves the log as it goes, follow stops when last_run is
+done (status file), and SIGTERM stops a pass cleanly.
 Everything is written to a temporary folder; your config and logs are untouched.
 """
 import os
 import sys
 import tempfile
 import types
-from typing import Any
+from typing import Any, List
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -103,6 +105,118 @@ finally:
 print("--- rebuild")
 runlog.RunLogger(cfg).run(rebuild=True)
 assert list(runlog.load(log.path).index) == [100, 101, 102, 103, 104, 106, 107, 108, 109, 110, 111]
+
+# ---------------------------------------------------------------- live batch-job behaviour
+print("--- parallel pass in chunks: the log grows during the pass, scans.csv with it")
+import multiprocessing  # noqa: E402
+import signal  # noqa: E402
+
+
+class _Job(object):
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    def ready(self) -> bool:
+        return True
+
+    def wait(self, t: float = 0.0) -> None:
+        pass
+
+    def get(self) -> Any:
+        return self.value
+
+
+class _InlinePool(object):
+    """multiprocessing's Pool, in this process (the fake dbpy exists only here)."""
+
+    def __init__(self, n: int, initializer: Any = None, initargs: Any = ()) -> None:
+        if initializer is not None:
+            initializer(*initargs)
+
+    def map_async(self, func: Any, items: Any, chunksize: int = 1) -> _Job:
+        return _Job([func(x) for x in items])
+
+    def __enter__(self) -> "_InlinePool":
+        return self
+
+    def __exit__(self, *a: Any) -> None:
+        pass
+
+
+class _Ctx(object):
+    Pool = _InlinePool
+
+
+real_get_context = multiprocessing.get_context
+multiprocessing.get_context = lambda method=None: _Ctx()  # type: ignore
+sizes = []  # type: List[int]
+real_save = runlog.save
+
+
+def counting_save(df: Any, path: str) -> None:
+    if path.endswith("runlog.csv"):
+        sizes.append(len(df))
+    real_save(df, path)
+
+
+runlog.save = counting_save
+for r in range(112, 140):
+    STATUS[r] = 0
+lg = runlog.RunLogger(cfg)
+lg.PASS_CHUNK, lg.CHECKPOINT, lg.workers = 7, 3, 2
+changed = lg.update_once()
+assert changed == list(range(112, 140)), changed
+assert len(set(sizes)) == 4 and sizes == sorted(sizes), sizes      # every chunk of 7 saved, growing
+assert os.path.exists(os.path.join(tmp, "scans.csv"))
+print("  ok: {} runs in chunks of 7, the log saved {} times while growing ({} .. {} rows)".format(
+    len(changed), len(sizes), sizes[0], sizes[-1]))
+runlog.save = real_save
+
+print("--- follow until last_run is stopped; status file; run_logger_status text")
+STATUS[140] = 2                                       # still running at the first pass
+sleeps = []  # type: List[float]
+real_sleep = runlog.time.sleep
+
+
+def fake_sleep(t: float) -> None:                     # the run stops while the logger waits
+    sleeps.append(t)
+    STATUS[140] = 0
+
+
+runlog.time.sleep = fake_sleep
+runlog.RunLogger(cfg).run(follow=True, poll=1.0, last_run=140)
+runlog.time.sleep = real_sleep
+st = runlog.read_status(log.path)
+assert len(sleeps) == 1 and st["phase"] == "finished" and st["last_logged_run"] == 140, (sleeps, st)
+assert runlog.load(log.path).loc[140, "status"] == "stopped"
+ok, text = runlog.logger_status(cfg, detail=True)
+assert not ok and "ended" in text and "finished" in text and "140" in text, text
+print("  ok: stopped after run 140 finished; status: " + text.replace("\n", " | "))
+
+print("--- SIGTERM (qdel / walltime) in the middle of a pass: saved, lock removed, a new logger continues")
+for r in range(141, 160):
+    STATUS[r] = 0
+real_runinfo = fake.read_runinfo
+
+
+def runinfo_term(bl: int, run: int) -> Any:
+    if run == 150:
+        os.kill(os.getpid(), signal.SIGTERM)
+    return real_runinfo(bl, run)
+
+
+fake.read_runinfo = runinfo_term
+lg = runlog.RunLogger(cfg)
+lg.CHECKPOINT = 4
+lg.run()
+fake.read_runinfo = real_runinfo
+df = runlog.load(log.path)
+assert 148 in df.index and 159 not in df.index, list(df.index)[-5:]
+assert not os.path.exists(log.path + ".lock")
+assert runlog.read_status(log.path)["phase"].startswith("stopped")
+assert runlog.RunLogger(cfg).update_once()[-1] == 159
+print("  ok: stopped at run {}, the rest done by the next logger".format(int(df.index.max())))
+multiprocessing.get_context = real_get_context
 
 print("\nOK  (log written to {})".format(log.path))
 print(runlog.load(log.path)[["status", "start_jst", "duration_s", "comment", "detectors"]].to_string())

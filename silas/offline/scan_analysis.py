@@ -618,8 +618,9 @@ def read_item(obj):
         raise ValueError(f"Unknown HDF5 object type '{kind}'")
 
 def load_h5(path: str) -> Dict[str, Any]:
-    """An analysis' scan_<id>.h5 as {"shots", "steps", "timetool", "results": DataFrames (the last
-    two only with time-tool binning), "info": dict}; text columns decoded."""
+    """An analysis' scan_<id>.h5 as {"shots", "steps": DataFrames, "results": dict (results()),
+    "timetool": dict (only with time-tool binning: "bins", "panels", "info", "off"), "info": dict};
+    text columns decoded."""
     import h5py
     import json
 

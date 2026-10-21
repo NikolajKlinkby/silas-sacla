@@ -212,11 +212,17 @@ or
 make_runlog(last_run=1234999)       # HPC: only the runs up to 1234999 (6 processes)
 ```
 
-A whole beamtime is better done as a batch job (it continues where it stopped; 24 h, 6 cores):
+A whole beamtime is better done as a batch job: it continues where the log stopped, writes the
+log as it goes (every 20 runs) and then follows the new runs (24 h, 6 cores):
 
 ```bash
-qsub -v LAST_RUN=1234999 ~/SILAS/scripts/runlog_job.sh
+qsub ~/SILAS/scripts/runlog_job.sh                       # catch up, then follow new runs
+qsub -v LAST_RUN=1234999 ~/SILAS/scripts/runlog_job.sh   # ... and stop when run 1234999 is done
 tail -f ~/SILAS/output/runlog_job.log
+```
+
+```python
+run_logger_status()                  # session: heartbeat, what it is doing, what is in the log
 ```
 
 During a beamtime it can follow the new runs for much longer in the `long` queue (up to 72 h and

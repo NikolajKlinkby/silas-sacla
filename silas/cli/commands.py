@@ -30,12 +30,16 @@ def build(cfg: Config) -> Dict[str, Any]:
         return runner.run("silas.online.logger", "--poll", str(poll), new_terminal=True)
 
     def make_runlog(rebuild: bool = False, last_run: Optional[int] = None,
-                    workers: int = runner.OFFLINE_WORKERS) -> Optional[int]:
+                    workers: int = runner.OFFLINE_WORKERS, follow: bool = False) -> Optional[int]:
         """(Re)create the run log from first_run in this terminal (offline logger), with
-        `workers` processes reading the runs (default 6; at most the job's cores)."""
+        `workers` processes reading the runs (default 6; at most the job's cores). follow=True:
+        then keep following new runs (Ctrl-C stops). Without a terminal: qsub
+        ~/SILAS/scripts/runlog_job.sh (follows); run_logger_status() shows how it is doing."""
         args = ["--workers", str(workers)]  # type: List[str]
         if rebuild:
             args.append("--rebuild")
+        if follow:
+            args.append("--follow")
         if last_run is not None:
             args += ["--last-run", str(last_run)]
         elif cfg.get("last_run", None) is not None:
@@ -633,8 +637,10 @@ def build(cfg: Config) -> Dict[str, Any]:
 
     def load_scan(which: int = -1) -> Dict[str, Any]:
         """Everything of an analysed scan from its scan_<id>.h5 (which as in scan_info):
-        {"shots", "steps", "bins", "off_steps" (pandas DataFrames; bins / off_steps only with
-        time-tool binning), "info" (dict)}."""
+        "shots", "steps" (pandas DataFrames), "results" (dict: "rois", "refs", "n_states", "raw" with
+        x, med, lo, hi, n (lo / hi: distances from the median; states x steps x ROIs), "raw_onoff",
+        "ref" per reference, "table", ...), "timetool" (only with time-tool binning: "bins" DataFrame,
+        "panels", "info", "off") and "info" (dict). See the notebook start_here.ipynb for examples."""
         from silas.offline import scan_analysis
 
         sid, _ = scan.select(cfg, which)
@@ -846,13 +852,19 @@ def build(cfg: Config) -> Dict[str, Any]:
                                       if given else "none (the analysis is not referenced)"))
         return given
 
-    def logger_status() -> bool:
-        """Is the online run logger running? (prints why / why not)"""
+    def run_logger_status() -> bool:
+        """Is a run logger running (online logger, make_runlog or the batch job runlog_job.sh)?
+        Its heartbeat (the lock file), what it last reported (catching up / waiting for new runs,
+        progress, PBS job) and what is in the run log. True while it is alive."""
         from silas.core import runlog
 
-        ok, text = runlog.logger_status(cfg)
+        ok, text = runlog.logger_status(cfg, detail=True)
         print(text)
         return ok
+
+    def logger_status() -> bool:
+        """The same as run_logger_status()."""
+        return run_logger_status()
 
     # ------------------------------------------------------------ energy calibration / threshold
     def set_threshold(keV: Optional[float] = None, on: bool = True, name: Optional[str] = None) -> None:
@@ -1007,6 +1019,7 @@ def build(cfg: Config) -> Dict[str, Any]:
         "load_full_frame": load_full_frame,
         "view_full_frame": view_full_frame,
         "logger_status": logger_status,
+        "run_logger_status": run_logger_status,
         "add_roi": add_roi,
         "remove_roi": remove_roi,
         "clear_rois": clear_rois,

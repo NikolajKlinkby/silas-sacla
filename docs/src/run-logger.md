@@ -9,9 +9,10 @@ the same code serves online and offline.
 | | Online logger | Offline logger |
 |---|---|---|
 | Where | beamline (DAQ-USER-LAN) | HPC (HPC-LAN) |
-| Behaviour | catches up from the first run, then **keeps watching** for new runs | catches up from the first run (or **recreates** the log), then stops |
-| Started with | `start_online_logger()` (opens its own terminal) | `make_runlog()` (runs in the session's terminal) |
-| Stop | Ctrl-C in its terminal | stops by itself |
+| Behaviour | catches up from the first run, then **keeps watching** for new runs | catches up from the first run (or **recreates** the log), then stops or (batch job) keeps watching |
+| Started with | `start_online_logger()` (opens its own terminal) | `make_runlog()` (the session's terminal) or `qsub ~/SILAS/scripts/runlog_job.sh` (batch job) |
+| Stop | Ctrl-C in its terminal | stops by itself; batch job: at `LAST_RUN`, the walltime or `qdel` |
+| Is it running? | `run_logger_status()` | `run_logger_status()` |
 
 ## Files
 
@@ -22,7 +23,8 @@ All files are in the profile's output folder (`paths.output`, e.g. `output/beaml
 | `runlog.csv` | one row per run (below) |
 | `scans.csv` | one row per scan: runs, scanned motor, steps (see [Scans](#scans)) |
 | `motors.csv` | the motor snapshot of every run, from which the scan table is made |
-| `runlog.csv.lock` | exists while a logger is writing (see *Lock file*) |
+| `runlog.csv.lock` | exists while a logger is writing; its time is the heartbeat (see *Lock file*) |
+| `runlog_status.json` | what the logger is doing or last did: phase, progress, PBS job (see [Is it running?](#is-it-running)) |
 
 `scans.csv` is rebuilt completely from `runlog.csv` and `motors.csv` whenever a run changes,
 so it can always be deleted; the next logger pass writes it again.
@@ -92,30 +94,67 @@ scan_info()
 ```
 
 `make_runlog` reads the runs with **6 worker processes** (`workers=`, default 6, at most the
-cores of the job; `workers=1`: one run after the other). First the records of all runs are
-read in parallel, then the motor snapshots with whole scans per worker: inside a scan the
+cores of the job; `workers=1`: one run after the other), 100 runs at a time: first their
+records in parallel, then their motor snapshots with whole scans per worker (inside a scan the
 steps stay in order, because step 1 searches all motors and the later steps use what it
-found. The online logger reads one run after the other (it follows the beamline anyway).
+found). The log, the motor snapshots and the scan table are written every 20 runs, so a long
+catch-up shows up in `runlog.csv`, `show_runlog()` and `show_scans()` as it goes. The online
+logger reads one run after the other (it follows the beamline anyway). `make_runlog(follow=True)`
+keeps following new runs after catching up (Ctrl-C stops).
 
 **Starting again.** A logger that is stopped in any way (Ctrl-C, a crash, a lost connection,
 the end of a batch job) can simply be started again: it continues after the last run in the log
 and re-checks the runs that were not finished yet. Nothing is rebuilt unless you ask for it
 (`rebuild=True`). The logger saves the log every 20 runs, so a hard stop loses at most the last
-20 runs, which are then read again.
+20 runs, which are then read again. Ctrl-C, `qdel` and the end of a batch job's walltime
+(SIGTERM) save first, so they lose nothing.
 
 ### As a batch job (HPC)
 
-A whole beamtime takes hours. Run it as a PBS job, which needs neither a terminal nor the
-laptop's connection (24 h, 6 cores and 6 workers, 16 GB):
+A whole beamtime takes hours, and during a beamtime the log should follow the new runs. Run it
+as a PBS job, which needs neither a terminal nor the laptop's connection (6 cores and 6 workers,
+16 GB, 24 h). Like the time-tool logger job it catches up and then **follows new runs**, writing
+the log as it goes:
 
 ```bash
-qsub -v LAST_RUN=1234999 ~/SILAS/scripts/runlog_job.sh             # continue up to this run
-qsub -v LAST_RUN=1234999,REBUILD=1 ~/SILAS/scripts/runlog_job.sh   # start again from first_run
-qstat -u $USER
-tail -f ~/SILAS/output/runlog_job.log
+qsub ~/SILAS/scripts/runlog_job.sh                              # catch up, then follow new runs
+qsub -v LAST_RUN=1234999 ~/SILAS/scripts/runlog_job.sh          # ... and stop when run 1234999 is done
+qsub -v ONCE=1 ~/SILAS/scripts/runlog_job.sh                    # one pass up to the newest run, then stop
+qsub -v REBUILD=1 ~/SILAS/scripts/runlog_job.sh                 # start again from first_run
+qsub -v FIRST_RUN=1234470,LAST_RUN=1234999 ~/SILAS/scripts/runlog_job.sh   # another range
+qsub -q long -l walltime=72:00:00 ~/SILAS/scripts/runlog_job.sh # the whole beamtime in one job
+qstat -u $USER                                                  # is the job there?
+tail -f ~/SILAS/output/runlog_job.log                           # one line per run
 ```
 
-`first_run` comes from the hpc config; without `LAST_RUN` it goes up to the newest run.
+`first_run` comes from the hpc config. While following, it looks for new runs every 10 s
+(`-v POLL=30` for another interval). `qdel` and the end of the walltime stop it cleanly; a new
+job continues where it stopped.
+
+### Is it running?
+
+```python
+run_logger_status()             # the same as logger_status()
+```
+
+```
+run logger running on xhpcsv12 (heartbeat 4 s ago)
+  catching up 240 of 1530 runs (1234470 .. 1235999); following new runs (reported 2026-11-02 10:14:03)
+  PBS job 123456.xhpcsv (6 workers)
+  run log .../runlog.csv: 1410 runs (1234470 .. 1235709), 1 not finished; written 2026-11-02 10:14:03
+```
+
+It works for every logger (online, `make_runlog`, the batch job) and from any computer that sees
+the output folder:
+
+- **Heartbeat**: a logger touches its lock file while it reads and after every pass (every
+  10 s while a batch job waits for new runs). Older than 2 minutes: not running (stopped,
+  killed or hanging). On the same computer the process itself is also checked.
+- **What it is doing** (`runlog_status.json`, written at every checkpoint and pass): catching up
+  (with progress), checking, waiting for new runs, or how it ended (finished, stopped, crashed
+  with the error).
+- **What is in the log**: number of runs, first and last, runs not finished yet, when it was
+  last written.
 
 A run log made before the scan table existed is upgraded automatically: on the first pass
 every run is read once more (to take its motor snapshot). This is slow only for the first
@@ -177,9 +216,10 @@ The same holds for the scan commands (`show_scans()`, `scan_info()`, ...; see
 
 While a logger runs it keeps `runlog.csv.lock` next to the log, containing the computer
 name and process number. A second logger on the same log refuses to start. The lock is
-removed when the logger stops. A lock left behind by a logger that was killed is taken over by
-the next one: on the same computer when its process is gone, and from another computer (e.g. a
-batch job on another node) when its heartbeat is older than 10 minutes. A message says so.
+removed when the logger stops (also after `qdel` or at the walltime). A lock left behind by a
+logger that was killed hard is taken over by the next one: on the same computer when its process
+is gone, and from another computer (e.g. a batch job on another node) when its heartbeat is older
+than 10 minutes. A message says so.
 
 ## Scans
 

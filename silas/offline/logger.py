@@ -1,10 +1,12 @@
-"""Offline run logger (HPC-LAN): (re)create the run log from first_run and stop.
+"""Offline run logger (HPC-LAN): (re)create the run log from first_run, then stop or follow.
 
     python -m silas.offline.logger              # add runs missing from the log
     python -m silas.offline.logger --rebuild    # recreate the log from first_run
     python -m silas.offline.logger --last-run N # stop at run N
-    python -m silas.offline.logger --follow     # keep following like the online logger
+    python -m silas.offline.logger --follow     # keep following like the online logger (with
+                                                # --last-run: until run N is logged and stopped)
     python -m silas.offline.logger --workers 6  # processes reading the runs (default 6)
+    qsub ~/SILAS/scripts/runlog_job.sh          # as a batch job (follows); run_logger_status()
 """
 import argparse
 from typing import List, Optional

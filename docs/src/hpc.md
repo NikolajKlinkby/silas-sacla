@@ -211,9 +211,10 @@ A job that takes hours (e.g. the run log of a whole beamtime) should not depend 
 laptop's connection. The run logger has a batch job that runs on its own:
 
 ```bash
-qsub -v LAST_RUN=1234999 ~/SILAS/scripts/runlog_job.sh    # on the login node
-qstat -u $USER                                                  # is it running?
+qsub ~/SILAS/scripts/runlog_job.sh                        # on the login node: catch up, then follow
+qstat -u $USER                                            # is the job there?
 tail -f ~/SILAS/output/runlog_job.log                     # its output
+# in the session: run_logger_status()                     # heartbeat, progress, the log
 ```
 
 See [Run logger](run-logger.md#as-a-batch-job-hpc). The same way: the time-tool log

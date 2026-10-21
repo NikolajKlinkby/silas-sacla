@@ -12,7 +12,7 @@ every 50th, i0 per shot), reduced for panels chosen so that the ROI "wide" is in
 4. pairs (on / off and on - off) and step_reference == brute force; FullFrame.onoff ==
    ratio_of_medians and FullFrame.difference == on - off of the brute force
 5. time-tool bins (fake time-tool log): raw, per i0 and step-wise on / off and on - off == brute force;
-   sparse bins have no images
+   sparse bins have no images; the point detectors per shot and per step == the fake values / numpy
 6. the statistics in real worker processes (multiprocessing) give the same file
 Without h5py (e.g. a bare container) a small in-memory stand-in is used; with h5py the real one.
 All in a temporary folder; your config is untouched.
@@ -493,6 +493,36 @@ assert n_img == int(bt["computed"].sum()) and n_img < len(bt)
 print("  ok: {} bins, {} with images (>= 3 shots), every statistic == numpy".format(len(bt), n_img))
 geom_shape = ff.assemble(ff.image("raw", step=0)).shape
 print("  assembled image {} ; info: {} shots used".format(geom_shape, ff.info["shots"]["used"]))
+
+# ---------------------------------------------------------------- 5b. point detectors
+print("--- 5b. point detectors per shot and per step")
+pts = ff.points
+assert len(pts) == len(ff.shots), (len(pts), len(ff.shots))
+assert "i0_1" in pts.columns and "delay_m" not in pts.columns, list(pts.columns)       # delay_m: the scanned motor
+assert "optical_shutter" not in pts.columns, list(pts.columns)                          # the pump detector
+for label, meta in ff.point_info.items():
+    assert all(isinstance(v, str) for v in meta.values()), meta                         # no None (HDF5 attributes)
+    assert "/" not in label, label
+    assert isinstance(ff.f["point_detectors"][label].attrs["detector"], str)
+for run in sorted(RUNS):
+    fl = flags_of(run)
+    in_run = (ff.shots["run"] == run).to_numpy()
+    by_tag = dict(zip(np.asarray(_tags(run)), fl["ref_i0_1"]))
+    exp = np.array([by_tag[t] for t in ff.shots["tag"].to_numpy()[in_run]])
+    close(pts["i0_1"].to_numpy()[in_run], exp, "i0_1 per shot, run {}".format(run))
+ps = ff.point_steps
+assert ps is not None and len(ps) == len(ff.steps)
+for j in range(feed.n_steps):
+    for s, sname in enumerate(("on", "off")):
+        m = (ff.shots["step_index"] == j) & (ff.shots["state"] == s) & ff.shots["read"].astype(bool)
+        v = pts["i0_1"][m].to_numpy()
+        v = v[np.isfinite(v)]
+        assert int(ps["i0_1_{}_n".format(sname)].iloc[j]) == len(v)
+        close(ps["i0_1_{}_mean".format(sname)].iloc[j], v.mean(), "i0_1 mean step {} {}".format(j, sname))
+        close(ps["i0_1_{}_median".format(sname)].iloc[j], np.median(v), "i0_1 median step {} {}".format(j, sname))
+        assert int(ps["i0_1_{}_n".format(sname)].iloc[j]) == int(ff.steps["n_{}_i0_1".format(sname)].iloc[j])
+print("  ok: {} point detectors per shot ({}); per step and state == numpy".format(len(pts.columns),
+                                                                                   ", ".join(pts.columns)))
 ff.close()
 
 # ---------------------------------------------------------------- 6. real worker processes
