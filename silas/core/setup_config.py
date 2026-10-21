@@ -85,18 +85,26 @@ def build(profile: str, beamline: Optional[int] = 3, first_run: Optional[int] = 
     if standard_setup and standard.known(bl):
         std = standard.BEAMLINES[bl]
         points = {}  # type: Dict[str, Any]
-        for true_name, alias, unit in std["point_detectors"]:
-            entry = {}  # type: Dict[str, Any]
-            if alias:
-                entry["alias"] = alias
-            if unit:
-                entry["unit"] = unit
-            points[true_name] = entry
-        data["point_detectors"] = points
-        data["detectors"] = {key: standard.array_entry(key, alias, n, overrides, ev_per_absgain_adu)
-                             for key, alias, n, overrides in std["mpccd_arrays"]}
-        data["default_mpccd"] = std["default_mpccd"]
-        data["scan"] = copy.deepcopy(std["scan"])
+        if "point_detectors" in std:
+            for true_name, alias, unit in std["point_detectors"]:
+                entry = {}  # type: Dict[str, Any]
+                if alias:
+                    entry["alias"] = alias
+                if unit:
+                    entry["unit"] = unit
+                points[true_name] = entry
+            data["point_detectors"] = points
+        if "mpccd_arrays" in std:
+            data["detectors"] = {key: standard.array_entry(key, alias, n, overrides, ev_per_absgain_adu)
+                                     for key, alias, n, overrides in std["mpccd_arrays"]}
+        if "detectors" in std:
+            data.setdefault("detectors", {}).update({
+                    key: standard.detector_entry(key, alias, overrides)
+                    for key, alias, overrides in std["detectors"]
+                })
+        data["default_mpccd"] = copy.deepcopy(std.get("default_mpccd", None))
+        data["scan"] = copy.deepcopy(std.get("scan", {}))
+        data["timetool"] = copy.deepcopy(std.get("timetool", {}))
     return data
 
 

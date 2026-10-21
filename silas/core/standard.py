@@ -25,7 +25,12 @@ BL3_POINT_DETECTORS = [
 
 # (common name of the panels, alias, number of panels, settings on top of mpccd.DEFAULTS)
 BL3_MPCCD_ARRAYS = [
-    ("MPCCD-8N0-3-002", "octal", 8, {}),
+    ("MPCCD-8N0-3-002", "octal", 8, {
+        "tag_step": 4,                                            # 15 Hz
+        "corrections": {"threshold": True, "threshold_keV": 2.0},
+        "display": {"cmap": "gray_r"},
+        "full_frame": {"panels": None},
+    }),
     ("MPCCD-2B1-M03-001", "dual", 2, {
         "tag_step": 2,                                            # 30 Hz
         "corrections": {"threshold": True, "threshold_keV": 2.0},
@@ -34,10 +39,17 @@ BL3_MPCCD_ARRAYS = [
     }),
 ]  # type: List[Tuple[str, Optional[str], int, Dict[str, Any]]]
 
+BL3_DETECTORS = [
+    ("OPAL-266931", "tt_camera", {
+        "kind": "camera"
+    }),
+]
+
 BEAMLINES = {
     3: {
         "point_detectors": BL3_POINT_DETECTORS,
         "mpccd_arrays": BL3_MPCCD_ARRAYS,
+        "detectors": BL3_DETECTORS,
         "default_mpccd": "MPCCD-8N0-3-002",
         "scan": {
             "pump_detector": "optical_shutter",
@@ -46,6 +58,10 @@ BEAMLINES = {
             "sparse_hide": True,
             "sparse_min": 30,
         },
+        "timetool": {
+            "detector": "OPAL-266931",
+            "roi": [1,1919,147,237],
+        }
     },
 }  # type: Dict[int, Dict[str, Any]]
 
@@ -75,6 +91,14 @@ def array_entry(key: str, alias: Optional[str], n_panels: int, overrides: Dict[s
         entry["alias"] = alias
     return entry
 
+def detector_entry(key: str, alias: Optional[str], overrides: Dict[str, Any]) -> Dict[str, Any]:
+    """The config entry of a detector: the beamline's settings on top."""
+    entry = {"kind": overrides.get("kind", "unknown")}  # type: Dict[str, Any]
+    for k, v in overrides.items():
+        entry[k] = copy.deepcopy(v)
+    if alias:
+        entry["alias"] = alias
+    return entry
 
 def add_standard_detectors(cfg: Config, beamline: Optional[int] = None, quiet: bool = False) -> None:
     """Add the standard point detectors and MPCCD arrays of the beamline (default: the config's)
@@ -113,3 +137,16 @@ def add_standard_detectors(cfg: Config, beamline: Optional[int] = None, quiet: b
             names.set_alias(cfg, key, alias)
         say("  added    {:<18s} {} ({} panels){}".format(
             "-" if taken else (alias or "-"), key, n, "   (alias {!r} already used)".format(alias) if taken else ""))
+
+    for key, alias, overrides in std["detectors"]:
+        if key in cfg.get("detectors", {}):
+            say("  exists   {}".format(key))
+            continue
+        taken = names.resolve(cfg, alias) != alias if alias else False
+        dets = dict(cfg.get("detectors", {}))
+        dets[key] = copy.deepcopy(overrides)
+        cfg.set("detectors", dets)
+        if alias and not taken:
+            names.set_alias(cfg, key, alias)
+        say("  added    {:<18s} {}{}".format(
+            "-" if taken else (alias or "-"), key, "   (alias {!r} already used)".format(alias) if taken else ""))
