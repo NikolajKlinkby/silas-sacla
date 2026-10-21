@@ -38,6 +38,8 @@ def build(cfg: Config) -> Dict[str, Any]:
             args.append("--rebuild")
         if last_run is not None:
             args += ["--last-run", str(last_run)]
+        elif cfg.get("last_run", None) is not None:
+            args += ["--last-run", str(cfg.get("last_run"))]
         return runner.run("silas.offline.logger", *args)
 
     def show_runlog(last: Optional[int] = 20) -> Any:
@@ -166,6 +168,7 @@ def build(cfg: Config) -> Dict[str, Any]:
         motor (default: configured point detectors with 'motor' in the name); prints which
         motors change between runs (= scanned). SACLA makes one run per scan step."""
         equip = [names.resolve(cfg, m) for m in motors] if motors else None
+        last_run = last_run or cfg.get("last_run", None)
         return scan.overview(cfg, first_run, last_run, equip)
 
     @sacla.requires_sacla
@@ -488,20 +491,22 @@ def build(cfg: Config) -> Dict[str, Any]:
         return runner.run("silas.online.tt_logger", *(["--test"] if use_test else []), new_terminal=True,
                           launcher=launcher, execute=use_test)
 
-    def make_tt_log(first_run: Optional[int] = None, stop_at: Optional[int] = None, follow: bool = False,
+    def make_tt_log(first_run: Optional[int] = None, last_run: Optional[int] = None, follow: bool = False,
                     rebuild: bool = False, workers: int = runner.OFFLINE_WORKERS,
                     redo_changed: bool = False) -> Optional[int]:
         """Time-tool log (HPC, stpy) in this terminal: the edge of every tag of every finished run
         from first_run (config or first_run=), written run by run like the run logger; runs done
         with other settings are kept (redo_changed=True: done again). It continues where the last
-        one stopped; rebuild=True starts from scratch. stop_at=N: stop after run N; follow=True: keep
-        following new runs (with stop_at: until run N is done). For a batch job:
-        qsub -v STOP_AT=N ~/SILAS/scripts/tt_logger_job.sh."""
+        one stopped; rebuild=True starts from scratch. last_run=N: stop after run N; follow=True: keep
+        following new runs (with last_run: until run N is done). For a batch job:
+        qsub -v last_run=N ~/SILAS/scripts/tt_logger_job.sh."""
         args = ["--workers", str(workers)]  # type: List[str]
         if first_run is not None:
             args += ["--first-run", str(int(first_run))]
-        if stop_at is not None:
-            args += ["--stop-at", str(int(stop_at))]
+        if last_run is not None:
+            args += ["--last-run", str(int(last_run))]
+        elif cfg.get("last_run", None) is not None:
+            args += ["--last-run", str(int(cfg.get("last_run")))]
         if follow:
             args.append("--follow")
         if rebuild:
@@ -893,9 +898,14 @@ def build(cfg: Config) -> Dict[str, Any]:
         energy_info(name=name)
 
     def set_xfel_shutter(detector: Optional[str] = "xfel_shutter") -> None:
-        """Set the X-FEL shutter detector and its "on" value."""
+        """Set the X-FEL shutter detector from point detectors (alias or true name) of the config (default: "xfel_shutter")."""
         cfg.set("xfel_shutter", detector)
         print("X-FEL shutter: {}".format(detector))
+
+    def set_last_run(run: int) -> None:
+        """Set the last run number of the config (cfg.set("last_run", run) once)."""
+        cfg.set("last_run", int(run))
+        print("last run: {}".format(run))
 
     # ------------------------------------------------------------ regions of interest
     def add_roi(roi_name: str, rows: Any, cols: Any, name: Optional[str] = None) -> None:
@@ -980,6 +990,7 @@ def build(cfg: Config) -> Dict[str, Any]:
         "set_photon_energy": set_photon_energy,
         "set_energy_calibration": set_energy_calibration,
         "set_xfel_shutter": set_xfel_shutter,
+        "set_last_run": set_last_run,
         "energy_info": energy_info,
         "start_scan_viewer": start_scan_viewer,
         "set_pump": set_pump,

@@ -174,19 +174,19 @@ takes each shot's correction from it.
 
 ```python
 make_tt_log()                                     # HPC: every finished run from first_run, then stop
-make_tt_log(stop_at=1234551)                      # ... up to that run
-make_tt_log(first_run=1234501, stop_at=1234551, follow=True)   # as if live: wait for new runs
+make_tt_log(last_run=1234551)                      # ... up to that run
+make_tt_log(first_run=1234501, last_run=1234551, follow=True)   # as if live: wait for new runs
 start_tt_logger()                                 # beamline: live (new terminal; 1 writer + 2 readers, MPI)
 tt_logger_status()                                # is one running, which runs are done
 df = load_tt(1234501)                             # one row per tag, with the correction
 ```
 
-As an HPC batch job (it follows new runs until the walltime or `qdel`; `STOP_AT` stops it
+As an HPC batch job (it follows new runs until the walltime or `qdel`; `LAST_RUN` stops it
 after that run, to try it on old data as if live):
 
 ```bash
 qsub ~/SILAS/scripts/tt_logger_job.sh
-qsub -v FIRST_RUN=1234501,STOP_AT=1234551 ~/SILAS/scripts/tt_logger_job.sh
+qsub -v FIRST_RUN=1234501,LAST_RUN=1234551 ~/SILAS/scripts/tt_logger_job.sh
 tail -f ~/SILAS/output/tt_logger_job.log
 ```
 
@@ -259,7 +259,7 @@ and print their speed.
 | `set_tt_edge(direction=, window=, smooth_px=, fit=, fit_range_px=, min_snr=, min_step=, max_diff_px=)` | edge finding |
 | `calibrate_tt(which, runs=, motor=, unit=, order=1, min_good=20, workers=6, max_tags=, show=True, save=True, mpi=False)` | calibration |
 | `set_tt_time(ps_per_pulse=0.006671)` | pulse -> ps |
-| `make_tt_log(first_run=, stop_at=, follow=False, rebuild=False, workers=6)`, `start_tt_logger(test=, workers=2)`, `tt_logger_status()` | the time-tool log |
+| `make_tt_log(first_run=, last_run=, follow=False, rebuild=False, workers=6)`, `start_tt_logger(test=, workers=2)`, `tt_logger_status()` | the time-tool log |
 | `load_tt(run)` | a run's log with the corrections |
 | `compare_tt_sacla(which, runs=, sacla_dir=, workers=6, max_tags=, show=True, mpi=False)` | against SACLA (`sacla_dir`: default `timetool.sacla_dir`) |
 

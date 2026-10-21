@@ -459,6 +459,8 @@ class RunLogger(object):
         processes (offline; capped at the job's cores)."""
         from silas.core import runner
 
+        last_run = last_run or self.cfg.get("last_run", None)
+
         self.workers = runner.cap_workers(workers) if workers > 1 else 1
         lock = _Lock(self.path)
         lock.acquire()

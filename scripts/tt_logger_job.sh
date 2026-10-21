@@ -2,15 +2,15 @@
 # Batch job (HPC): the time-tool log (the edge of every tag of every run) WITHOUT a terminal.
 #
 #   qsub ~/SILAS/scripts/tt_logger_job.sh                          # from first_run on, follows new runs
-#   qsub -v STOP_AT=1234551 ~/SILAS/scripts/tt_logger_job.sh       # ... and stops after run 1234551
-#   qsub -v FIRST_RUN=1234501,STOP_AT=1234551 ~/SILAS/scripts/tt_logger_job.sh
+#   qsub -v LAST_RUN=1234551 ~/SILAS/scripts/tt_logger_job.sh       # ... and stops after run 1234551
+#   qsub -v FIRST_RUN=1234501,LAST_RUN=1234551 ~/SILAS/scripts/tt_logger_job.sh
 #   qsub -v REBUILD=1 ...                                                # forget the index, do every run again
 #   qstat -u $USER                                                       # is it running?
 #   tail -f ~/SILAS/output/tt_logger_job.log                       # its output
 #
 # Runs already done with the current settings are not done again (they are in
 # <output>/timetool/edges/index.csv). Uses the hpc config (time-tool settings, background,
-# first_run). Without STOP_AT it follows new runs until the walltime ends or qdel.
+# first_run). Without LAST_RUN it follows new runs until the walltime ends or qdel.
 #PBS -N bt_ttlog
 #PBS -q serial
 #PBS -l select=1:ncpus=6:mem=16gb
@@ -23,7 +23,7 @@ bt_env || exit 1
 cd "$SILAS_HOME" || exit 1
 mkdir -p output
 args=(--workers 6 --follow)
-[ -n "${STOP_AT:-}" ] && args+=(--stop-at "$STOP_AT")
+[ -n "${LAST_RUN:-}" ] && args+=(--last-run "$LAST_RUN")
 [ -n "${FIRST_RUN:-}" ] && args+=(--first-run "$FIRST_RUN")
 [ "${REBUILD:-0}" = "1" ] && args+=(--rebuild)
 echo "$(date)  time-tool logger on $(hostname): ${args[*]}" >> output/tt_logger_job.log

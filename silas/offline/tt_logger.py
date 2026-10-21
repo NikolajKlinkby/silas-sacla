@@ -1,10 +1,10 @@
 """Time-tool log (HPC, stpy): the edge of EVERY tag of every run, run by run, like the run logger.
 
     make_tt_log()                                          # from the session: up to the newest run, then stop
-    make_tt_log(stop_at=1234551)                           # ... up to run 1234551
+    make_tt_log(last_run=1234551)                           # ... up to run 1234551
     make_tt_log(follow=True)                               # keep following new runs (Ctrl-C stops)
-    python -m silas.offline.tt_logger [--follow] [--stop-at N] [--first-run N] [--rebuild] [--workers 6]
-    qsub -v STOP_AT=1234551 ~/SILAS/scripts/tt_logger_job.sh      # batch job (follows without STOP_AT)
+    python -m silas.offline.tt_logger [--follow] [--last-run N] [--first-run N] [--rebuild] [--workers 6]
+    qsub -v LAST_RUN=1234551 ~/SILAS/scripts/tt_logger_job.sh      # batch job (follows without last_run)
 
 Written to <output>/timetool/edges/:
   run_<run>.csv   one row per tag: tag, edge (camera pixel), edge_deriv, edge_fit, step, width,
@@ -25,7 +25,7 @@ kept unless --redo-changed (the scan analysis redoes the runs it needs). Every r
 done by a pool of --workers processes (one line of progress per part); each run's file is
 written as soon as its parts are done. A lock file (index.csv.lock, with a heartbeat) stops
 two loggers writing the same log; tt_logger_status() tells whether one is running.
---follow: after catching up, look for new runs every --poll seconds; --stop-at N: stop after
+--follow: after catching up, look for new runs every --poll seconds; --last-run N: stop after
 run N (also with --follow: it waits for run N to finish).
 """
 import argparse
@@ -186,12 +186,12 @@ class EdgeLogger(object):
 
             map_jobs(jobs, self.workers, on_result=done)
 
-    def update_once(self, first: int, stop_at: Optional[int]) -> int:
+    def update_once(self, first: int, last_run: Optional[int]) -> int:
         """One pass. Returns the newest run looked at."""
         self.cfg.reload()
         s = timetool.settings(self.cfg)
         newest = db.newest_run(self.bl)
-        last = min(newest, stop_at) if stop_at is not None else newest
+        last = min(newest, last_run) if last_run is not None else newest
         runs = self.todo(s, first, last)
         if runs:
             print("{} runs to do ({} .. {}), settings {}".format(len(runs), runs[0], runs[-1], timetool.settings_id(s)),
@@ -200,17 +200,18 @@ class EdgeLogger(object):
         self.heartbeat()
         return last
 
-    def finished(self, stop_at: int) -> bool:
-        """Run stop_at is done (or has no camera)."""
-        return stop_at in self.index.index and str(self.index.at[stop_at, "status"]) in ("done", "no camera")
+    def finished(self, last_run: int) -> bool:
+        """Run last_run is done (or has no camera)."""
+        return last_run in self.index.index and str(self.index.at[last_run, "status"]) in ("done", "no camera")
 
     def run(self, follow: bool = False, poll: float = 30.0, rebuild: bool = False, first_run: Optional[int] = None,
-            stop_at: Optional[int] = None) -> None:
+            last_run: Optional[int] = None) -> None:
         s = timetool.settings(self.cfg)
         if not s["background"].get("file"):
             print("no time-tool background: set_tt_background(run=...) first (without it no edge is good)")
             return
         first = first_run if first_run is not None else self.cfg.get("first_run", None)
+        last = last_run or self.cfg.get("last_run", None)
         if first is None:
             raise ValueError('no first run: cfg.set("first_run", <run number>) or --first-run')
         lock = _Lock(self.path)
@@ -223,16 +224,16 @@ class EdgeLogger(object):
                 self.index = pd.DataFrame(columns=INDEX_COLUMNS).set_index("run")
                 save_index(self.index, self.path)
             print("time-tool log: {}  (beamline {}, from run {}{}, {})".format(
-                timetool.edges_dir(self.cfg), self.bl, first, ", stop at run {}".format(stop_at) if stop_at else "",
+                timetool.edges_dir(self.cfg), self.bl, first, ", stop at run {}".format(last_run) if last_run else "",
                 "following new runs, Ctrl-C to stop" if follow else "one pass"))
             print("settings: ROI {}, binning {}, background {} ({}), edge: {}".format(
                 s.get("roi") or "whole image", s.get("binning"), s["background"].get("source"),
                 s["background"].get("mode"), timetool.edge_text(s["edge"])), flush=True)
-            self.update_once(int(first), stop_at)
-            while follow and not (stop_at is not None and self.finished(stop_at)):
+            self.update_once(int(first), last_run)
+            while follow and not (last_run is not None and self.finished(last_run)):
                 time.sleep(poll)
-                self.update_once(int(first), stop_at)
-            print("time-tool log up to date{}".format(" (stopped at run {})".format(stop_at) if stop_at else ""))
+                self.update_once(int(first), last_run)
+            print("time-tool log up to date{}".format(" (stopped at run {})".format(last_run) if last_run else ""))
         except KeyboardInterrupt:
             print("\nstopped; the runs done so far are in {}".format(timetool.edges_dir(self.cfg)))
         finally:
@@ -266,7 +267,7 @@ def status(cfg: Any, max_age_s: float = 120.0) -> str:
 def main(argv: Optional[List[str]] = None) -> None:
     ap = argparse.ArgumentParser(description="time-tool log: the edge of every tag of every run (HPC, stpy)")
     ap.add_argument("--follow", action="store_true", help="keep following new runs (Ctrl-C stops)")
-    ap.add_argument("--stop-at", "--stop_at", type=int, dest="stop_at", help="stop after this run")
+    ap.add_argument("--last-run", "--last_run", type=int, dest="last_run", help="stop after this run")
     ap.add_argument("--first-run", type=int, help="start here instead of the config's first_run")
     ap.add_argument("--rebuild", action="store_true", help="forget the index and do every run again")
     ap.add_argument("--redo-changed", action="store_true",
@@ -276,7 +277,7 @@ def main(argv: Optional[List[str]] = None) -> None:
                     help="processes (default {})".format(runner.OFFLINE_WORKERS))
     args = ap.parse_args(argv)
     EdgeLogger(Config(), args.workers, redo_changed=args.redo_changed).run(follow=args.follow, poll=args.poll, rebuild=args.rebuild,
-                                           first_run=args.first_run, stop_at=args.stop_at)
+                                           first_run=args.first_run, last_run=args.last_run)
 
 
 if __name__ == "__main__":
