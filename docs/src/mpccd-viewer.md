@@ -144,7 +144,7 @@ Ctrl-C in the terminal; the session prompt comes back.
 For every tag of the runs (or the ones chosen with `max_tags` / `every`), as in the
 [scan analysis](scans.md#which-shots-are-used):
 
-- X-rays off (`laser_shutter` = 0) or a bad beam status: not loaded;
+- X-rays off (`xfel_shutter` = 0) or a bad beam status: not loaded;
 - the pump state from the pump detector (`set_pump`, default `optical_shutter` = 1 is pump
   on): pump on or pump off; unknown: not loaded;
 - the raw panels of the other shots are read with stpy, spread over the `workers`.

@@ -16,7 +16,7 @@ with the common BL3 detectors (`silas/core/standard.py`); change or add to them 
 | Alias | True name | Meaning |
 |---|---|---|
 | `optical_shutter` | `xfel_bl_3_lh1_shutter_1_open_valid/status` | optical (pump) laser shutter open |
-| `laser_shutter` | `xfel_bl_3_shutter_1_open_valid/status` | X-ray shutter open |
+| `xfel_shutter` | `xfel_bl_3_shutter_1_open_valid/status` | X-ray shutter open |
 | `i0_1`, `i0_2` | `xfel_bl_3_st_2_pd_user_6/7_fitting_peak/voltage` | incident intensity photodiodes |
 | `delay_m` | `xfel_bl_3_st_2_motor_1/position` | pump-probe delay stage (pulse) |
 | `delay_tt` | `xfel_bl_3_st_1_motor_73/position` | delay of the timing tool |

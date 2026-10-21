@@ -105,7 +105,7 @@ def main() -> None:
     tags0 = all_tags[run0]
     taghi = db.high_tag(bl, run0)
     pump, _ = scanroi.pump_settings(cfg)
-    wanted = [("laser_shutter", names.resolve(cfg, "laser_shutter"))]
+    wanted = [("xfel_shutter", names.resolve(cfg, cfg.get("xfel_shutter", None)))]
     if pump:
         wanted.append(("pump", pump))
     wanted += scanroi.reference_settings(cfg)          # the reference detectors (set_references)

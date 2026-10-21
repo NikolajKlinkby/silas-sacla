@@ -19,7 +19,7 @@ three integer-binned (1 ADU) histograms:
 
 and finds the noise peak (sigma) and the 1- and 2-photon peaks. The photon energy is
 taken from the run (dbpy.read_config_photonenergy_in_keV). Shots with the X-ray shutter
-closed (laser_shutter = 0) are histogrammed separately (pure noise), if there are any.
+closed (xfel_shutter = 0) are histogrammed separately (pure noise), if there are any.
 
 Results in output/adu_calib/:
   adu_hist_<det>.npz      all histograms (counts per integer ADU, offset in 'adu0')
@@ -43,7 +43,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-XRAY_SHUTTER = "xfel_bl_3_shutter_1_open_valid/status"   # alias laser_shutter (XFEL shutter)
+XRAY_SHUTTER = "xfel_bl_3_shutter_1_open_valid/status"   # alias xfel_shutter (XFEL shutter)
 W_SI_EV = 3.65                                           # eV per electron-hole pair in Si
 
 ADU_LO = -1000          # histogram range (1 ADU bins); values outside go to the end bins

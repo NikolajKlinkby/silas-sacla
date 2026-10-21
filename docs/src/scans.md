@@ -49,7 +49,7 @@ It exists twice, with the same ROIs, corrections and pump settings:
 
 For every shot of every run of the scan:
 
-- X-rays off (`laser_shutter` = 0) or a bad beam status: dropped;
+- X-rays off (`xfel_shutter` = 0) or a bad beam status: dropped;
 - pump state from the pump detector: on, off, or unknown (dropped);
 - only the panels that the ROIs cover are read, and only the ROI pixels are corrected (dark,
   threshold) and converted to keV;

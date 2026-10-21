@@ -149,15 +149,21 @@ It asks:
 (Or all at once: `setup_config(beamline=3, first_run=1234400, photon_energy_keV=9.9,
 output="pcmo_2026")`; from bash: `bash scripts/setup_config.sh --beamline 3 ...`.)
 
+Make sure to configure the point detectors, the MPCCD arrays and the time-tool detector (if used) as needed. 
+It is also a very good idea to set up the last run number with `set_last_run(1234500)`. During the beamtime 
+you might not know the last run number yet, so set it to something high and change it later if you exceed it.
+
 ### Point detectors
 
-The standard BL3 set: `optical_shutter`, `laser_shutter` (the X-ray shutter), `i0_1`, `i0_2`,
+The standard BL3 set: `optical_shutter`, `xfel_shutter` (the X-ray shutter), `i0_1`, `i0_2`,
 `delay_m`, `delay_tt`. Add what this experiment needs beyond it, e.g. a fluence motor:
 
 ```python
 find_equipment("*bl_3*motor*")                                           # the names (live / HPC)
 add_point_detector("xfel_bl_3_st_2_motor_4/position", alias="fluence_1", unit="pulse")
 ```
+
+Check that the X-FEL shutter is set correctly in the configuration (`cfg.set("xfel_shutter", <alias or full name to point detector >)`).
 
 ### Image detectors
 

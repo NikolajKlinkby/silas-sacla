@@ -33,6 +33,8 @@ def default_config(profile_name: str) -> Dict[str, Any]:
         "profile": profile_name,
         "beamline": DEFAULT_BEAMLINE,
         "first_run": None,
+        "last_run": None,
+        "xfel_shutter": None,  # alias of the point detector that is the X-FEL shutter
         # photon energy (keV) used by all analysis; null: taken from the run record (dbpy)
         "photon_energy_keV": None,
         "paths": {

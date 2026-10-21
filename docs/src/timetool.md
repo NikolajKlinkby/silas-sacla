@@ -54,7 +54,7 @@ Each shot gets a class from the SyncDB flags:
 | xray only | X-rays on, laser off |
 | other | neither, or a flag not readable |
 
-"X-rays on" is the X-ray shutter (`laser_shutter`, 0 = closed). The time-tool laser has no
+"X-rays on" is the X-ray shutter (`xfel_shutter`, 0 = closed). The time-tool laser has no
 flag by default (always on), for setups where its probe does not go through the pump
 shutter. If it has a shutter of its own: `set_tt_laser("<detector>", on_value=1)`.
 

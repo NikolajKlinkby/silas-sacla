@@ -67,7 +67,7 @@ def _tags(run: int) -> List[int]:
 def _sync(equip: str, taghi: int, tags: Any) -> Any:
     assert isinstance(tags, tuple), "dbpy wants a tuple"
     i = np.asarray(tags) // feed.tag_step
-    if equip.startswith("xfel_bl_3_shutter_1"):            # laser_shutter (X-rays)
+    if equip.startswith("xfel_bl_3_shutter_1"):            # xfel_shutter (X-rays)
         return tuple(np.where(i % 50 == 7, 0.0, 1.0))
     if equip.startswith("xfel_bl_3_lh1_shutter_1"):        # optical_shutter (pump), 1 = on
         return tuple(np.where(i % 4 == 0, 0.0, 1.0))

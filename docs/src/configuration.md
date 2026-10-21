@@ -22,6 +22,15 @@ bash scripts/setup_config.sh --beamline 3 --first-run 1234400 --photon-energy 9.
 bash scripts/setup_config.sh --profile beamline --beamline 3   # another profile's config
 ```
 
+It can be a very good idea to setup a last run number (the last run of the beamtime) with 
+`--last-run` / `last_run=...`. This helps for at home analysis, and runaway scripts, but
+it is optional. If you do not yet have one you can set it to some high number and change it 
+later.
+
+```python
+set_last_run(1234500)  # set the last run number of the config (cfg.set("last_run", run) once)
+```
+
 What is not given is asked for: the first run (empty: none, set it later), the photon energy in keV
 (empty: from the run record of each run) and the output folder, a name under `/UserData/<user>/`
 (empty: `tmp`) or a full path. `yes=True` / `--yes` asks nothing and takes the defaults. An
@@ -32,14 +41,18 @@ existing config is replaced only after asking (`--yes`: without asking); the old
 |---|---|---|
 | beamline, first run, photon energy, output | ✓ | ✓ |
 | `calibration.ev_per_absgain_adu` = 3.65 (for MPCCD arrays) | ✓ | ✓ |
-| point detectors | – | `optical_shutter`, `laser_shutter`, `i0_1`, `i0_2`, `delay_m`, `delay_tt` |
+| point detectors | – | `optical_shutter`, `xfel_shutter`, `i0_1`, `i0_2`, `delay_m`, `delay_tt` |
+| xfel shutter | – | `xfel_shutter` (the shutter of the beamline) |
 | MPCCD arrays | – | `octal` (MPCCD-8N0-3-002, the default array) and `dual` (MPCCD-2B1-M03-001: 30 Hz, threshold 2 keV) |
 | scan settings | – | pump `optical_shutter` = 1, references `i0_1`, `i0_2`, sparse bins below 30 shots hidden |
+| time-tool | – | detector `OPAL-266931`, roi setup|
 
 The standard setup is in `silas/core/standard.py` (only BL3 so far). ROIs, darks, the time-tool
 background and calibration are results of the experiment and are made in the session as usual.
 
 ## What is in it
+
+`Deprecated: the configuration is slightly changed`
 
 ```json
 {
@@ -74,6 +87,8 @@ background and calibration are results of the experiment and are made in the ses
 |---|---|
 | `beamline` | beamline number, 3 by default |
 | `first_run` | first run of the beamtime; the [run logger](run-logger.md) starts here |
+| `last_run` | optional: last run of the beamtime; the [run logger](run-logger.md) and [tt logger](timetool.md) stops here |
+| `xfel_shutter` | optional: alias of the point detector that is the X-FEL shutter; used for the [scan analysis](scans.md) |
 | `photon_energy_keV` | photon energy for all analysis; `null`: from the run record ([Energy calibration](energy-calibration.md#the-photon-energy)) |
 | `paths.output` | folder for results of this profile: `runlog.csv`, `scans.csv`, `motors.csv`, ... |
 | `detectors` | image detectors and MPCCD arrays, see [Detectors and aliases](detectors.md) and [MPCCD viewer](mpccd-viewer.md); an array's `calibration` and `corrections` (dark, threshold in keV): [Energy calibration, threshold and dark](energy-calibration.md); its `rois`: [ROIs](rois.md) |
