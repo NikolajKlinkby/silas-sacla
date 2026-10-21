@@ -38,6 +38,7 @@ EXTRA_PKGS=(
   mypy          # type checker used by scripts/sacla_check.sh
   pandas
   "markdown-it-py>=3.0"
+  markdown
 )
 
 step() { echo; echo "=== $*"; }

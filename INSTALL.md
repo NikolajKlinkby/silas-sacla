@@ -28,6 +28,13 @@ configuration, the run log, the calibrations and the analysis.
 - **At SACLA** nothing has to be installed system-wide: the code uses SACLA's Intel Python 3.7
   and its libraries; the extra packages go into folders in your home.
 
+## Estimated time
+
+- HPC installation: **~2 minutes**
+- Local API: **10–15 minutes** (depends on VPN connection)
+- Building the docs: **~1 or 15 minutes** (depends on whether the SACLA manuals are downloaded)
+- Running the test suite: **~2 minutes**
+
 ## 1. The code
 
 ```bash
@@ -151,8 +158,8 @@ bash ~/SILAS/scripts/install_beamline_env.sh        # report of the computer + d
 bash ~/SILAS/scripts/install_beamline_env.sh --go   # shortcuts, IPython and tornado
 ```
 
-Log in again; `bl` starts the session with the beamline profile, `bl_check` checks the environment,
-`bl_update --go` fetches newer code from the HPC. The installer was written before we had access
+Log in again; `bt` starts the session with the beamline profile, `bt_check` checks the environment,
+`bt_update --go` fetches newer code from the HPC. The installer was written before we had access
 to these computers: its report (`output/beamline_probe_<host>.txt`) says what to adapt.
 Details: [Working at the beamline](docs/src/beamline.md).
 

@@ -200,6 +200,12 @@ Details: [Run logger](run-logger.md).
 make_runlog()                        # HPC: all finished runs from first_run (6 processes)
 ```
 
+or 
+
+```python
+make_runlog(last_run=1234999)       # HPC: only the runs up to 1234999 (6 processes)
+```
+
 A whole beamtime is better done as a batch job (it continues where it stopped; 24 h, 6 cores):
 
 ```bash
