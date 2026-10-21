@@ -15,7 +15,7 @@ reading stops getting faster at about 1100 shots/s (4 processes): that is the li
 The scan is chosen as in scan_info(): -1 the newest scan of the run log, -2 the one before,
 0 the first, or any run number of the scan. For every shot:
 
-  * X-rays off (laser_shutter = 0) or bad beam status: kept in the table, not used
+  * X-rays off (xfel_shutter = 0) or bad beam status: kept in the table, not used
   * pump state from the config's scan.pump_detector (value scan.pump_on_value = on); none set:
     every shot in one group
   * the reference detectors of the config (scan.references, set_references(...), e.g. i0):
@@ -61,7 +61,7 @@ from silas.core import db, energy, mpccd, names, roi, sacla, scan, scanroi
 from silas.core.config import Config
 
 FLAG_CHUNK = 2000
-XRAY_SHUTTER = "laser_shutter"
+XRAY_SHUTTER = "xfel_shutter"
 TIMERS = ("flags", "images", "roi_sums")
 
 
@@ -123,7 +123,12 @@ def shot_flags(cfg: Config, bl: int, run: int, taghi: int, tags: Sequence[int]) 
     detector), and "ref_<label>" for every reference detector (NaN where not recorded)."""
     import dbpy
 
-    xray = _point(names.resolve(cfg, XRAY_SHUTTER), taghi, tags)
+    if cfg.get(XRAY_SHUTTER, None) is None:
+        xray = np.ones(len(tags), float)  # no shutter flag: always on
+        print("no X-ray shutter defined (set {} in the config)".format(XRAY_SHUTTER))
+        print("all shots will be treated as X-rays on (shutter open).")
+    else:
+        xray = _point(names.resolve(cfg, cfg.get(XRAY_SHUTTER, None)), taghi, tags)
     use = ~(xray == 0)
     beam = np.ones(len(tags), bool)
     for i in range(0, len(tags), FLAG_CHUNK):

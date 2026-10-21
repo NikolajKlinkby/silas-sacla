@@ -55,7 +55,7 @@ CAMERAS = ("OPAL", "IPX", "CHET")     # SACLA's timing-monitor cameras (detector
 BINNINGS = ("rows", "cols")
 MODES = ("divide", "subtract")
 DIRECTIONS = ("any", "rising", "falling")
-XRAY_SHUTTER = "laser_shutter"         # alias of the XFEL shutter (0 = X-rays off)
+XRAY_SHUTTER = "xfel_shutter"         # alias of the XFEL shutter (0 = X-rays off)
 
 DEFAULTS = {
     "detector": None,           # camera detector ID; None: the first OPAL / IPX / CHET found
@@ -481,7 +481,12 @@ def run_flags(cfg: Any, run: int, tags: Optional[Sequence[int]] = None) -> Dict[
     tags = list(tags if tags is not None else db.tags(bl, run))
     n = len(tags)
     try:
-        xray = np.array(db.read_point(names.resolve(cfg, XRAY_SHUTTER), taghi, tags, errors="nan"), float)
+        if cfg.get(XRAY_SHUTTER, None) is None:
+            xray = np.ones(n, float)  # no shutter flag: always on
+            print("no X-ray shutter defined (set {} in the config)".format(XRAY_SHUTTER))
+            print("all shots will be treated as X-rays on (shutter open).")
+        else:
+            xray = np.array(db.read_point(names.resolve(cfg, cfg.get(XRAY_SHUTTER, None)), taghi, tags, errors="nan"), float)
     except (KeyError, ValueError):
         xray = np.full(n, np.nan)
     det, on = laser_settings(cfg)
@@ -675,7 +680,7 @@ def background_from_run(cfg: Any, run: int, workers: int = 6, max_shots: Optiona
         print("no shot with the laser ON ({}) and the X-rays OFF ({}) in run {}: no background made. "
               "Is the laser detector right (set_tt_laser)? If the X-rays were blocked by something the "
               "flags do not show, check the shots in the viewer (no edge?) and use shots=\"all\"."
-              .format(laser or "no flag", XRAY_SHUTTER, run))
+              .format(laser or "no flag", cfg.get(XRAY_SHUTTER, None), run))
         return None
     if max_shots and len(pick) > max_shots:
         pick = pick[np.linspace(0, len(pick) - 1, int(max_shots)).astype(int)]

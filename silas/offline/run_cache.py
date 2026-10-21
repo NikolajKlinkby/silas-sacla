@@ -143,6 +143,11 @@ def plan_shots(cfg: Config, runs: Sequence[int], max_tags: Optional[int], every:
             continue
         taghi = db.high_tag(bl, int(run))
         flags = shot_flags(cfg, bl, int(run), taghi, tags)
+        #Check if all shots have unknown xfel shutter state
+        if flags["use"].sum() == 0:
+            print("run {}: all {} tags have X-FEL off".format(run, len(tags)))
+            print("setting all {} tags to X-FEL on".format(len(tags)))
+            flags["use"] = np.ones(len(tags), bool)
         counts["tags"] += len(tags)
         for i, tag in enumerate(tags):
             if not flags["use"][i]:

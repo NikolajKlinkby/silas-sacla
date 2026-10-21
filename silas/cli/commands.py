@@ -892,6 +892,11 @@ def build(cfg: Config) -> Dict[str, Any]:
         mpccd.set_option(cfg, "calibration.ev_per_absgain_adu", float(ev_per_absgain_adu), name)
         energy_info(name=name)
 
+    def set_xfel_shutter(detector: Optional[str] = "xfel_shutter") -> None:
+        """Set the X-FEL shutter detector and its "on" value."""
+        cfg.set("xfel_shutter", detector)
+        print("X-FEL shutter: {}".format(detector))
+
     # ------------------------------------------------------------ regions of interest
     def add_roi(roi_name: str, rows: Any, cols: Any, name: Optional[str] = None) -> None:
         """Add or replace a ROI: rows (first, last) and columns (first, last), inclusive, in pixels
@@ -974,6 +979,7 @@ def build(cfg: Config) -> Dict[str, Any]:
         "set_threshold": set_threshold,
         "set_photon_energy": set_photon_energy,
         "set_energy_calibration": set_energy_calibration,
+        "set_xfel_shutter": set_xfel_shutter,
         "energy_info": energy_info,
         "start_scan_viewer": start_scan_viewer,
         "set_pump": set_pump,

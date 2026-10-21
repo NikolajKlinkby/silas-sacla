@@ -65,7 +65,7 @@ class LiveCamera(object):
         self._flags = {}  # type: Dict[int, Flags]
         self._tried = {}  # type: Dict[int, float]
         self.laser, self.laser_on = timetool.laser_settings(cfg)
-        self.xray = self._resolve(timetool.XRAY_SHUTTER)
+        self.xray = self._resolve(cfg.get(timetool.XRAY_SHUTTER, None))
 
     def _resolve(self, name: str) -> Optional[str]:
         from silas.core import names
@@ -117,7 +117,12 @@ class LiveCamera(object):
             if self.run not in self._taghi:
                 self._taghi[self.run] = db.high_tag(self.cfg.beamline, self.run)
             hi = self._taghi[self.run]
-            x = float(dbpy.read_syncdatalist_float(self.xray, hi, (tag,))[0]) if self.xray else math.nan
+            if self.xray is None:
+                x = 1.0  # no X-ray shutter defined: always on
+                print("no X-ray shutter defined (set {} in the config)".format(timetool.XRAY_SHUTTER))
+                print("all shots will be treated as X-rays on (shutter open).")
+            else:
+                x = float(dbpy.read_syncdatalist_float(self.xray, hi, (tag,))[0]) if self.xray else math.nan
             if self.laser:
                 lv = float(dbpy.read_syncdatalist_float(self.laser, hi, (tag,))[0])
                 laser = float(timetool.laser_flag([lv], self.laser_on)[0])

@@ -8,7 +8,7 @@ The offline counterpart of capture_dark() (silas.online.dark, live at the beamli
 run recorded with the X-rays blocked. shots="all" (default) averages every shot of the run, as
 for the time-tool background: the X-rays can be blocked by something the flags do not show;
 check the run first (start_mpccd_viewer(run=N) shows no photons). shots="xray_off": only the
-shots with the X-ray shutter (alias laser_shutter) closed.
+shots with the X-ray shutter (alias xfel_shutter) closed.
 
 The mean is saved to <output>/darks/dark_<array>_run<N>_<time>.npz (the same file as
 capture_dark writes) and set as the array's dark_file, with dark subtraction switched on; a running
@@ -28,7 +28,7 @@ from silas.core import db, mpccd, names, runner, sacla
 from silas.core.config import Config
 from silas.core.corrections import save_dark
 
-XRAY_SHUTTER = "laser_shutter"      # alias of the XFEL shutter point detector (0 = X-rays off)
+XRAY_SHUTTER = "xfel_shutter"      # alias of the XFEL shutter point detector (0 = X-rays off)
 
 
 def _sum_part(job: Tuple[int, List[str], int, List[int]]) -> Tuple[Optional[np.ndarray], int, int]:
@@ -55,10 +55,12 @@ def pick_tags(cfg: Config, bl: int, run: int, shots: str, max_shots: Optional[in
     """The run's tags (all, or those with the X-ray shutter closed), at most max_shots spread evenly."""
     tags = np.array(db.tags(bl, run), np.int64)
     if shots == "xray_off":
-        equip = names.resolve(cfg, XRAY_SHUTTER)
+        equip = names.resolve(cfg, cfg.get(XRAY_SHUTTER, None))
+        if equip is None:
+            raise ValueError("no X-ray shutter defined (set {} in the config)".format(XRAY_SHUTTER))
         flag = np.array(db.read_point(equip, db.high_tag(bl, run), list(tags), errors="nan"), float)
         print("X-ray shutter ({}): {} closed, {} open, {} unknown".format(
-            XRAY_SHUTTER, int(np.sum(flag == 0)), int(np.sum(flag > 0)), int(np.sum(np.isnan(flag)))))
+            cfg.get(XRAY_SHUTTER, None), int(np.sum(flag == 0)), int(np.sum(flag > 0)), int(np.sum(np.isnan(flag)))))
         tags = tags[flag == 0]
     elif shots != "all":
         raise ValueError('shots must be "all" or "xray_off"')

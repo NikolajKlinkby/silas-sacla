@@ -105,6 +105,7 @@ def build(profile: str, beamline: Optional[int] = 3, first_run: Optional[int] = 
         data["default_mpccd"] = copy.deepcopy(std.get("default_mpccd", None))
         data["scan"] = copy.deepcopy(std.get("scan", {}))
         data["timetool"] = copy.deepcopy(std.get("timetool", {}))
+        data["xfel_shutter"] = copy.deepcopy(std.get("xfel_shutter", None))
     return data
 
 

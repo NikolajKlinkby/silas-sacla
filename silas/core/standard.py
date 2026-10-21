@@ -16,7 +16,7 @@ from silas.core.config import Config
 # T12 (xfel_bl_3_st_2_motor_6): add them per experiment with add_point_detector.
 BL3_POINT_DETECTORS = [
     ("xfel_bl_3_lh1_shutter_1_open_valid/status", "optical_shutter", None),
-    ("xfel_bl_3_shutter_1_open_valid/status", "laser_shutter", None),
+    ("xfel_bl_3_shutter_1_open_valid/status", "xfel_shutter", None),
     ("xfel_bl_3_st_2_pd_user_6_fitting_peak/voltage", "i0_1", "V"),
     ("xfel_bl_3_st_2_pd_user_7_fitting_peak/voltage", "i0_2", "V"),
     ("xfel_bl_3_st_2_motor_1/position", "delay_m", "pulse"),      # the pump-probe delay stage
@@ -61,7 +61,8 @@ BEAMLINES = {
         "timetool": {
             "detector": "OPAL-266931",
             "roi": [1,1919,147,237],
-        }
+        },
+        "xfel_shutter": "xfel_shutter",
     },
 }  # type: Dict[int, Dict[str, Any]]
 

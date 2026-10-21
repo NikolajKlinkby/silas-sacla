@@ -34,7 +34,7 @@ from silas.core.config import Config
 GONE = "gone"
 """read(): the tag is no longer in the online buffer (older tags are gone too)."""
 
-XRAY_SHUTTER = "laser_shutter"           # XFEL shutter: 0 = X-rays off
+XRAY_SHUTTER = "xfel_shutter"           # XFEL shutter: 0 = X-rays off
 pump_settings = scanroi.pump_settings
 
 
@@ -56,7 +56,7 @@ class LiveFeed(object):
         self.tag_step = int(tag_step)
         self.pump, self.pump_on = pump_settings(cfg)
         self.n_states = 2 if self.pump else 1
-        self.xray = names.resolve(cfg, XRAY_SHUTTER)
+        self.xray = names.resolve(cfg, cfg.get(XRAY_SHUTTER, None))
         self._readers = None  # type: Optional[List[Any]]
         self._buffers = None  # type: Optional[List[Any]]
         self._infos = None  # type: Optional[List[Dict[str, Any]]]
@@ -138,7 +138,12 @@ class LiveFeed(object):
         taghi = int(info.get("taghi") or db.high_tag(self.cfg.beamline, int(info["run"])))
         use = np.ones(n, bool)
         if self.xray:
-            x = np.array(db.read_point(self.xray, taghi, tags, errors="nan"))
+            if self.xray is None:
+                x = np.ones(n, float)  # no X-ray shutter defined: always on
+                print("no X-ray shutter defined (set {} in the config)".format(XRAY_SHUTTER))
+                print("all shots will be treated as X-rays on (shutter open).")
+            else:
+                x = np.array(db.read_point(self.xray, taghi, tags, errors="nan"))
             use &= ~(x == 0)                            # NaN (not recorded): keep
         try:
             beam = np.array(dbpy.read_beamstatuslist(self.cfg.beamline, taghi, tuple(int(t) for t in tags)))
